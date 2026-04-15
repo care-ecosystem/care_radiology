@@ -29,25 +29,26 @@ services:
       WILDFLY_WAIT_FOR: ldap:389 db:5432
     depends_on:
       - ldap
-      - db
-      - minio
+      # - db
+      # - minio
     volumes:
       - arc-wildfly:/opt/wildfly/standalone
       - arc-storage:/storage
 
   ohif:
     image: ohif/app:v3.9.2
+    platform: linux/amd64
     volumes:
-      - ./care_radiology/docker/ohif/app-config.js:/usr/share/nginx/html/app-config.js
+      - ./docker/ohif/app-config.js:/usr/share/nginx/html/app-config.js
 
   nginx:
     image: nginx:alpine
     ports:
       - "32314:80"
     volumes:
-      - ./care_radiology/docker/nginx-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - backend
+      # - backend
       - ohif
       - arc
 
