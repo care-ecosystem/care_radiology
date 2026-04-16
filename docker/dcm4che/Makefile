@@ -7,7 +7,7 @@ SQL_FK_CREATE = ./sql-scripts/20_create-fk-index.sql
 SQL_IDX_CREATE = ./sql-scripts/30_create-case-insensitive-index.sql
 # SH_COLLAPSE_CONFIG = psql-set-collapse-limit.sh
 
-PSQL = psql -h localhost -U $(DB_USER) -d $(DB_NAME)
+PSQL = psql -h localhost -p 5432 -U $(DB_USER) -d $(DB_NAME)
 
 .PHONY: setup-dicom-db start stop
 
