@@ -58,13 +58,17 @@ class DicomViewSet(ViewSet):
         dcm_file = request.FILES.get("file")
 
         if not AuthorizationController.call("can_write_patient_obj", self.request.user, patient):
-            raise PermissionDenied(f"You do not have permission to upload DICOM for this patient")
+            raise PermissionDenied("You do not have permission to upload DICOM for this patient")
 
         if not dcm_file:
             return Response({"error": "No file provided"}, status=400)
 
         try:
             body, content_type = encode_file_multipart_related(dcm_file)
+
+            print("Content Type:", content_type)
+            print("DCM4CHEE_BASEURL:", DCM4CHEE_BASEURL)
+
             upload_response = requests.post(
                 url=f"{DCM4CHEE_BASEURL}/rs/studies",
                 data=body,
@@ -73,50 +77,72 @@ class DicomViewSet(ViewSet):
                     "Accept": "application/dicom+json",
                 },
             )
-            if upload_response.status_code in [200, 201]:
-                refenrenced_sop = d_find(
-                    upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value
-                )[0]
 
-                instance_uid = d_find(
-                    refenrenced_sop, DICOM_TAG.ReferencedInstanceUID.value
-                )[0]
+            print("STATUS:", upload_response.status_code)
+            print("RAW TEXT:", upload_response.text)
 
-                study_uid = d_find(
-                    d_query_instance(instance_uid), DICOM_TAG.StudyInstanceUID.value
-                )[0]
+            # ✅ Accept 409 as success
+            if upload_response.status_code in [200, 201, 202, 409]:
 
-                DicomStudy.objects.update_or_create(
-                    dicom_study_uid=study_uid,
-                    patient=patient,
-                    defaults={},
-                )
+                data = upload_response.json()
 
-                # Bust the study from cache
-                key = f"radiology:dicom:study:{study_uid}"
-                cache.delete(key)
+                try:
+                    ref_sop = d_find(data, DICOM_TAG.ReferencedSOPSQ.value)[0]
+
+                    instance_uid = d_find(
+                        ref_sop, DICOM_TAG.ReferencedInstanceUID.value
+                    )[0]
+
+                    study_uid = d_find(
+                        d_query_instance(instance_uid),
+                        DICOM_TAG.StudyInstanceUID.value
+                    )[0]
+
+                except Exception as parse_error:
+                    print("DICOM parse error:", str(parse_error))
+                    study_uid = None
+
+                # ✅ Store mapping only if available
+                if study_uid:
+                    DicomStudy.objects.update_or_create(
+                        dicom_study_uid=study_uid,
+                        patient=patient,
+                        defaults={},
+                    )
+
+                    # Bust cache
+                    cache.delete(f"radiology:dicom:study:{study_uid}")
 
                 return Response(
                     data={
-                        "message": "DICOM file uploaded to Orthanc successfully",
+                        "status": "success",
+                        "message": (
+                            "DICOM already exists in DCM4CHEE"
+                            if upload_response.status_code == 409
+                            else "DICOM uploaded successfully"
+                        ),
                         "study_uid": study_uid,
-                        "study": fetch_study(study_uid),
+                        "dicom_response": data,
                     },
-                    status=201,
+                    status=200,
                 )
 
+            # ❌ Real failure
             else:
                 return Response(
                     data={
-                        "error": "Failed to upload to DCM4CHE",
+                        "error": "Failed to upload to DCM4CHEE",
                         "status_code": upload_response.status_code,
+                        "details": upload_response.text,
                     },
                     status=502,
                 )
 
         except Exception as e:
+            print("UPLOAD ERROR:", str(e))
             return Response(
-                data={"error": "Exception occurred", "details": str(e)}, status=500
+                data={"error": "Exception occurred", "details": str(e)},
+                status=500,
             )
 
     # Get list of studies
