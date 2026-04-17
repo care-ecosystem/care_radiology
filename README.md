@@ -2,6 +2,17 @@
 
 Django plugin for ohcnetwork/care.
 
+## Upstream
+
+This plugin uses **dcm4che**:
+https://github.com/dcm4che/dcm4che
+
+The **dcm4chee-arc-psql** Docker image is sourced from:
+https://github.com/dcm4che-dockerfiles/dcm4chee-arc-psql
+
+PostgreSQL database initialization scripts are sourced from:
+https://github.com/dcm4che-dockerfiles/postgres-dcm4chee
+
 ## Local Development
 
 To develop the plug in local environment along with care, follow the steps below:
@@ -66,14 +77,14 @@ up:
         2. Edit the variables in `docker/dcm4che/Makefile` to match your Postgres setup.
         3. Run the target `setup-dicom-db` in `docker/dcm4che/Makefile`
 
-7. Setting up OHIF 
+7. Setting up OHIF
     1. OHIF is the web-based DICOM viewer and must point to publicly accessible DICOMweb endpoints.
     2. Update the following keys in `docker/ohif/app-config.js` to point to the publicly accessible URL for dcm4che DICOMweb API
         1. `dataSources[0].wadoRoot`
         2. `dataSources[0].wadoUriRoot`
         3. `dataSources[0].qidoRoot`.
     3. NOTE: These URLs must be reachable from the browser.
-    4. Typically in localhost configurations this will look like 
+    4. Typically in localhost configurations this will look like
 ```
 wadoUriRoot: 'http://localhost:32314/dicomweb/dcm4chee-arc/aets/DCM4CHEE/wado',
 qidoRoot: 'http://localhost:32314/dicomweb/dcm4chee-arc/aets/DCM4CHEE/rs',

@@ -6,20 +6,42 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.cache import cache
-from care.security.authorization.base import AuthorizationController
+from django.db.models import Q, OuterRef, Exists
+from django.contrib.auth.models import AnonymousUser
 
+from care.emr.models.device import Device
+from care.security.authorization.base import AuthorizationController
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.permissions import BasePermission
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
-from rest_framework.viewsets import ViewSet
-from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.viewsets import ViewSet
 
 from care.emr.models.patient import Patient
+from care.emr.models.service_request import ServiceRequest
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.settings import plugin_settings
+from care_radiology.models.study_report import StudyReport
 
-DCM4CHEE_BASEURL =  plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
+
+DCM4CHEE_BASEURL = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL']
+STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
+
+class StaticAPIKeyAuthentication(BaseAuthentication, BasePermission):
+    def authenticate(self, request):
+        api_key = request.headers.get("Authorization")
+        if api_key == STATIC_API_KEY:
+            return (AnonymousUser(), None)
+        raise AuthenticationFailed("Invalid API key")
+
+    def has_permission(self, request):
+        api_key = request.headers.get("Authorization")
+        if api_key == STATIC_API_KEY:
+            return (AnonymousUser(), None)
+        raise AuthenticationFailed("Invalid API key")
+
 
 
 class DICOM_TAG(Enum):
@@ -50,6 +72,36 @@ class DicomViewSet(ViewSet):
     @action(detail=False, methods=["get"], url_path="authenticate")
     def authenticate(self, _):
         return Response(status=200)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="worklist",
+        permission_classes = [AllowAny]
+    )
+    def worklist(self, request):
+        # Manually authenticate
+        authenticator = StaticAPIKeyAuthentication()
+        user_auth_tuple = authenticator.authenticate(request)
+        if user_auth_tuple is None:
+            raise AuthenticationFailed("Invalid API key")
+
+        modality = request.query_params.get("modality", None)
+        from_date = parse_date(request.query_params.get("from"))
+        to_date = parse_date(request.query_params.get("to"))
+        facility = request.query_params.get("facility")
+
+        results = get_service_requests(
+            modality=modality,
+            from_date=from_date,
+            to_date=to_date,
+            limit=1000,  # optional, default is 1000
+        )
+
+        return Response(data={
+            "status": "success",
+            "results": results
+        }, status=200)
 
     # DCM Files upload
     @action(detail=False, methods=["post"], url_path="upload")
@@ -86,11 +138,19 @@ class DicomViewSet(ViewSet):
                     d_query_instance(instance_uid), DICOM_TAG.StudyInstanceUID.value
                 )[0]
 
-                DicomStudy.objects.update_or_create(
+                studies_qs = DicomStudy.objects.annotate(
+                    has_report=Exists(
+                        StudyReport.objects.filter(study=OuterRef('pk'))
+                    )
+                )
+
+                (dicom_study, is_created) = DicomStudy.objects.update_or_create(
                     dicom_study_uid=study_uid,
                     patient=patient,
                     defaults={},
                 )
+
+                dicom_study = studies_qs.get(pk=dicom_study.pk)
 
                 # Bust the study from cache
                 key = f"radiology:dicom:study:{study_uid}"
@@ -100,7 +160,7 @@ class DicomViewSet(ViewSet):
                     data={
                         "message": "DICOM file uploaded to Orthanc successfully",
                         "study_uid": study_uid,
-                        "study": fetch_study(study_uid),
+                        "study": fetch_study(dicom_study),
                     },
                     status=201,
                 )
@@ -128,12 +188,13 @@ class DicomViewSet(ViewSet):
         if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
             raise PermissionDenied(f"You do not have permission to view this patient")
 
-        studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
+        report_exists = StudyReport.objects.filter(study=OuterRef('pk'))
+        studies = DicomStudy.objects.filter(patient__external_id=patient_external_id).annotate(has_report=Exists(report_exists))
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_study = {
-                executor.submit(fetch_study, study.dicom_study_uid): study
+                executor.submit(fetch_study, study): study
                 for study in studies
             }
             for future in as_completed(future_to_study):
@@ -157,15 +218,20 @@ class DicomViewSet(ViewSet):
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
             raise PermissionDenied(f"You do not have permission to view this service request")
 
+        report_exists = StudyReport.objects.filter(study=OuterRef("dicom_study__pk"))
         tsr = RadiologyServiceRequest.objects.filter(
             service_request__external_id=service_request_external_id,
             dicom_study__dicom_study_uid__isnull=False,
-        )
+        ).annotate(has_report=Exists(report_exists)).select_related("dicom_study")
+
+        for r in tsr:
+            r.dicom_study.has_report = r.has_report
+
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_study = {
-                executor.submit(fetch_study, r.dicom_study.dicom_study_uid): r
+                executor.submit(fetch_study, r.dicom_study): r
                 for r in tsr
             }
 
@@ -178,10 +244,12 @@ class DicomViewSet(ViewSet):
         )
 
 
-def fetch_study(study_uid):
+def fetch_study(dicom_study: DicomStudy):
+    study_uid = dicom_study.dicom_study_uid
     key = f"radiology:dicom:study:{study_uid}"
     cached = cache.get(key)
     if cached:
+        cached["has_report"] = dicom_study.has_report
         return cached
 
     study = d_query_study(study_uid)
@@ -219,11 +287,62 @@ def fetch_study(study_uid):
         "study_description": study_description,
         "study_modalities": d_find(study, DICOM_TAG.StudyModalities.value),
         "study_series": series,
+        "external_id": dicom_study.external_id,
+        "has_report": dicom_study.has_report
     }
 
     cache.set(key, cachable, timeout=60 * 60)
     return cachable
 
+def get_service_requests(
+    *,
+    from_date=None,
+    to_date=None,
+    modality=None,
+    limit=1000,
+):
+    filters = Q(status="active", deleted=False)
+
+    if modality:
+        device_location_ids = Device.objects.filter(
+            registered_name__iexact=modality
+        ).values_list("current_location_id", flat=True)
+        filters &= Q(activity_definition__locations__overlap=device_location_ids)
+
+    if from_date:
+        filters &= Q(created_date__gte=from_date)
+
+    if to_date:
+        filters &= Q(created_date__lte=to_date)
+
+    qs = ServiceRequest.objects.filter(filters).select_related(
+        "patient", "facility", "activity_definition"
+    )[:limit]
+
+    results = []
+    for sr in qs:
+        results.append(
+            {
+                "service_request": {
+                    "id": sr.external_id,
+                    "name": sr.activity_definition.title,
+                    "date": sr.created_date
+                },
+                "facility": {
+                    "id": sr.facility.external_id,
+                    "name": sr.facility.name
+                },
+                "patient": {
+                    "name": sr.patient.name,
+                    "address": sr.patient.address,
+                    "phone_number": sr.patient.phone_number,
+                    "gender": sr.patient.gender,
+                    "age": sr.patient.age
+                }
+            }
+        )
+
+    return results
 
 # Dicom Web Utilities ---------------------------------------------------------
 def d_query_instance(instance_id):
@@ -338,6 +457,16 @@ def d_datetime_to_iso(da, tm=None):
 
     return dt.isoformat()
 
+# Date utils ------------------------------------------------------------------
+def parse_date(date_str):
+    if not date_str:
+        return None
+    try:
+        # Try full datetime first
+        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        # Fallback to date-only if time not provided
+        return datetime.strptime(date_str, "%Y-%m-%d")
 
 # Multipart Related Encoder ---------------------------------------------------
 def encode_file_multipart_related(file_obj):
