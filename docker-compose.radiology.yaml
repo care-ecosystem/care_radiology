@@ -27,6 +27,8 @@ services:
     platform: linux/amd64
     ports:
       - "3000:80"
+    volumes:
+      - ./docker/ohif/app-config.js:/usr/share/nginx/html/app-config.js
 
   nginx:
     image: nginx:alpine
