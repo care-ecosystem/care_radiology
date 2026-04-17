@@ -275,8 +275,41 @@ Images are stored in:
 | Radiology dev | Run full stack |
 
 ---
+## 🚀 17. How do I configure the Radiology Viewer base URL in a CARE plugin?
+✅ Step 1: Add it during plugin registration
 
-## 🚀 17. What are key architectural learnings?
+While registering your plugin, include radiologyViewerBaseUrl in the config:
+
+{
+  "url": "http://localhost:5173/assets/remoteEntry.js",
+  "name": "care_radiology",
+  "radiologyViewerBaseUrl": "http://localhost:3000"
+}
+✅ Step 2: Access it inside your plugin
+
+In your plugin code (e.g., src/components/DicomViewer.tsx), access it via the runtime meta:
+
+const meta = window.__CARE_PLUGIN_RUNTIME__?.meta?.[PLUGIN_SLUG] as PlugConfigMeta;
+
+// Preferred: if config is nested
+const ohifBaseUrl = meta?.config?.radiologyViewerBaseUrl || "";
+
+// Fallback: if config is flattened at root level
+// const ohifBaseUrl = meta?.radiologyViewerBaseUrl || "";
+
+console.log("Plugin meta:", meta);
+console.log("OHIF Base URL:", ohifBaseUrl);
+⚠️ Important Notes
+Depending on how CARE injects plugin config, the value may be:
+Inside meta.config (recommended)
+Or directly on meta (less common)
+To make your code robust, you can support both:
+const ohifBaseUrl =
+  meta?.config?.radiologyViewerBaseUrl ||
+  meta?.radiologyViewerBaseUrl ||
+  "";
+
+## 🚀 18. What are key architectural learnings?
 
 ### 🔴 Current State
 
@@ -293,7 +326,7 @@ Images are stored in:
 
 ---
 
-## 🧾 18. Final takeaway
+## 🧾 19. Final takeaway
 
 👉 The radiology plugin is not just a feature — it is a **full radiology subsystem integrated into CARE**.
 
