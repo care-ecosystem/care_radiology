@@ -136,51 +136,51 @@ class DicomViewSet(ViewSet):
             # ✅ Accept 409 as success
             if upload_response.status_code in [200, 201, 202, 409]:
 
-                # data = upload_response.json()
+                data = upload_response.json()
 
-                # try:
-                #     ref_sop = d_find(data, DICOM_TAG.ReferencedSOPSQ.value)[0]
+                try:
+                    ref_sop = d_find(data, DICOM_TAG.ReferencedSOPSQ.value)[0]
 
-                #     instance_uid = d_find(
-                #         ref_sop, DICOM_TAG.ReferencedInstanceUID.value
-                #     )[0]
+                    instance_uid = d_find(
+                        ref_sop, DICOM_TAG.ReferencedInstanceUID.value
+                    )[0]
 
-                #     study_uid = d_find(
-                #         d_query_instance(instance_uid),
-                #         DICOM_TAG.StudyInstanceUID.value
-                #     )[0]
+                    study_uid = d_find(
+                        d_query_instance(instance_uid),
+                        DICOM_TAG.StudyInstanceUID.value
+                    )[0]
 
-                # except Exception as parse_error:
-                #     print("DICOM parse error:", str(parse_error))
-                #     study_uid = None
+                except Exception as parse_error:
+                    print("DICOM parse error:", str(parse_error))
+                    study_uid = None
 
-                # # ✅ Store mapping only if available
-                # if study_uid:
-                #     DicomStudy.objects.update_or_create(
-                #         dicom_study_uid=study_uid,
-                #         patient=patient,
-                #         defaults={},
-                #     )
-
-                #     # Bust cache
-                #     cache.delete(f"radiology:dicom:study:{study_uid}")
-                studies_qs = DicomStudy.objects.annotate(
-                    has_report=Exists(
-                        StudyReport.objects.filter(study=OuterRef('pk'))
+                # ✅ Store mapping only if available
+                if study_uid:
+                    DicomStudy.objects.update_or_create(
+                        dicom_study_uid=study_uid,
+                        patient=patient,
+                        defaults={},
                     )
-                )
 
-                (dicom_study, is_created) = DicomStudy.objects.update_or_create(
-                    dicom_study_uid=study_uid,
-                    patient=patient,
-                    defaults={},
-                )
+                    # Bust cache
+                    cache.delete(f"radiology:dicom:study:{study_uid}")
+                # studies_qs = DicomStudy.objects.annotate(
+                #     has_report=Exists(
+                #         StudyReport.objects.filter(study=OuterRef('pk'))
+                #     )
+                # )
 
-                dicom_study = studies_qs.get(pk=dicom_study.pk)
+                # (dicom_study, is_created) = DicomStudy.objects.update_or_create(
+                #     dicom_study_uid=study_uid,
+                #     patient=patient,
+                #     defaults={},
+                # )
 
-                # Bust the study from cache
-                key = f"radiology:dicom:study:{study_uid}"
-                cache.delete(key)
+                # dicom_study = studies_qs.get(pk=dicom_study.pk)
+
+                # # Bust the study from cache
+                # key = f"radiology:dicom:study:{study_uid}"
+                # cache.delete(key)
 
                 return Response(
                     data={
@@ -191,8 +191,8 @@ class DicomViewSet(ViewSet):
                             else "DICOM uploaded successfully"
                         ),
                         "study_uid": study_uid,
-                        # "dicom_response": data,
-                        "study": fetch_study(dicom_study),
+                        "dicom_response": data,
+                        # "study": fetch_study(dicom_study),
                     },
                     status=200,
                 )
