@@ -39,6 +39,9 @@ services:
     image: ohif/app:v3.9.2
     volumes:
       - ./care_radiology/docker/ohif/app-config.js:/usr/share/nginx/html/app-config.js
+    ports:
+      - "3000:80"
+      - "3001:8080"
 
   nginx:
     image: nginx:alpine

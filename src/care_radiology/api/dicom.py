@@ -18,6 +18,9 @@ from care.emr.models.patient import Patient
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.settings import plugin_settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 DCM4CHEE_BASEURL =  plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
@@ -122,7 +125,14 @@ class DicomViewSet(ViewSet):
     # Get list of studies
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
+        logger.info("Fetching studies request received", request)
         patient_external_id = request.query_params.get("patientId")
+
+        logger.info("Fetching studies request received", extra={
+            "patient_external_id": patient_external_id,
+            "user_id": request.user.id,
+        })
+
 
         patient = Patient.objects.get(external_id=patient_external_id)
         if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
