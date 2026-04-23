@@ -1,0 +1,52 @@
+{{- if .Values.ohif.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "care-radiology.fullname" . }}-ohif
+  labels:
+    app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ohif
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: viewer
+spec:
+  replicas: {{ .Values.ohif.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ohif
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ohif
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: ohif
+        image: "{{ .Values.ohif.image.repository }}:{{ .Values.ohif.image.tag }}"
+        imagePullPolicy: {{ .Values.ohif.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+        volumeMounts:
+        - name: ohif-config
+          mountPath: /usr/share/nginx/html/app-config.js
+          subPath: app-config.js
+        resources:
+          {{- toYaml .Values.ohif.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 5
+      volumes:
+      - name: ohif-config
+        configMap:
+          name: {{ include "care-radiology.fullname" . }}-ohif-config
+{{- end }}

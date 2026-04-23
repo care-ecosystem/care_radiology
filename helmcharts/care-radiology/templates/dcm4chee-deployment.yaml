@@ -1,0 +1,122 @@
+{{- if .Values.dcm4chee.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "care-radiology.fullname" . }}-dcm4chee
+  labels:
+    app.kubernetes.io/name: {{ include "care-radiology.name" . }}-dcm4chee
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: pacs
+spec:
+  replicas: {{ .Values.dcm4chee.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "care-radiology.name" . }}-dcm4chee
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "care-radiology.name" . }}-dcm4chee
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      initContainers:
+      - name: wait-for-dependencies
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+          - |
+            echo "Waiting for PostgreSQL..."
+            until nc -z {{ .Values.dcm4chee.env.POSTGRES_HOST }} {{ .Values.dcm4chee.env.POSTGRES_PORT }}; do
+              echo "PostgreSQL not ready, waiting..."
+              sleep 5
+            done
+            echo "PostgreSQL is ready!"
+
+            echo "Waiting for LDAP..."
+            until nc -z {{ include "care-radiology.fullname" . }}-ldap {{ .Values.ldap.service.port }}; do
+              echo "LDAP not ready, waiting..."
+              sleep 5
+            done
+            echo "LDAP is ready!"
+
+            echo "All dependencies are ready!"
+      containers:
+      - name: dcm4chee
+        image: "{{ .Values.dcm4chee.image.repository }}:{{ .Values.dcm4chee.image.tag }}"
+        imagePullPolicy: {{ .Values.dcm4chee.image.pullPolicy }}
+        env:
+        - name: POSTGRES_HOST
+          value: {{ .Values.dcm4chee.env.POSTGRES_HOST | quote }}
+        - name: POSTGRES_PORT
+          value: {{ .Values.dcm4chee.env.POSTGRES_PORT | quote }}
+        - name: POSTGRES_DB
+          value: {{ .Values.dcm4chee.env.POSTGRES_DB | quote }}
+        - name: POSTGRES_USER
+          value: {{ .Values.dcm4chee.env.POSTGRES_USER | quote }}
+        - name: POSTGRES_PASSWORD
+          value: {{ .Values.dcm4chee.env.POSTGRES_PASSWORD | quote }}
+        - name: LDAP_URL
+          value: {{ .Values.dcm4chee.env.LDAP_URL | quote }}
+        - name: LDAP_BASE_DN
+          value: {{ .Values.dcm4chee.env.LDAP_BASE_DN | quote }}
+        - name: LDAP_ROOTPASS
+          value: {{ .Values.dcm4chee.env.LDAP_ROOTPASS | quote }}
+        - name: LDAP_CONFIGPASS
+          value: {{ .Values.dcm4chee.env.LDAP_CONFIGPASS | quote }}
+        - name: WILDFLY_ADMIN_USER
+          value: {{ .Values.dcm4chee.env.WILDFLY_ADMIN_USER | quote }}
+        - name: WILDFLY_ADMIN_PASSWORD
+          value: {{ .Values.dcm4chee.env.WILDFLY_ADMIN_PASSWORD | quote }}
+        - name: ARCHIVE_DEVICE_NAME
+          value: {{ .Values.dcm4chee.env.ARCHIVE_DEVICE_NAME | quote }}
+        - name: AE_TITLE
+          value: {{ .Values.dcm4chee.env.AE_TITLE | quote }}
+        - name: DICOM_PORT
+          value: {{ .Values.dcm4chee.env.DICOM_PORT | quote }}
+        - name: STORAGE_ACCESS_KEY
+          value: {{ .Values.dcm4chee.env.STORAGE_ACCESS_KEY | quote }}
+        - name: STORAGE_SECRET_KEY
+          value: {{ .Values.dcm4chee.env.STORAGE_SECRET_KEY | quote }}
+        - name: STORAGE_ENDPOINT
+          value: {{ .Values.dcm4chee.env.STORAGE_ENDPOINT | quote }}
+        - name: STORAGE_BUCKET
+          value: {{ .Values.dcm4chee.env.STORAGE_BUCKET | quote }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: dicom
+          containerPort: 11112
+          protocol: TCP
+        - name: hl7
+          containerPort: 2575
+          protocol: TCP
+        - name: admin
+          containerPort: 9990
+          protocol: TCP
+        volumeMounts:
+        - name: dcm4chee-storage
+          mountPath: /opt/wildfly/standalone/log
+          subPath: logs
+        - name: dcm4chee-storage
+          mountPath: /storage/fs1
+          subPath: storage
+        resources:
+          {{- toYaml .Values.dcm4chee.resources | nindent 10 }}
+        {{- with .Values.dcm4chee.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.dcm4chee.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: dcm4chee-storage
+        {{- if .Values.dcm4chee.persistence.enabled }}
+        persistentVolumeClaim:
+          claimName: {{ include "care-radiology.fullname" . }}-dcm4chee
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,20 @@
+{{- if .Values.ldap.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "care-radiology.fullname" . }}-ldap
+  labels:
+    app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ldap
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ldap
+spec:
+  type: {{ .Values.ldap.service.type }}
+  ports:
+  - port: {{ .Values.ldap.service.port }}
+    targetPort: ldap
+    protocol: TCP
+    name: ldap
+  selector:
+    app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ldap
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

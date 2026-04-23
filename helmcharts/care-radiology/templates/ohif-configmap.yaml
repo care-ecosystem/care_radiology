@@ -1,0 +1,12 @@
+{{- if .Values.ohif.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "care-radiology.fullname" . }}-ohif-config
+  labels:
+    app.kubernetes.io/name: {{ include "care-radiology.name" . }}-ohif
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  app-config.js: |
+{{ .Values.ohif.config.appConfig | indent 4 }}
+{{- end }}

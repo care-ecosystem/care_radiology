@@ -1,0 +1,523 @@
+# Production Values for Care Radiology
+# Copy this file and customize for your production environment
+
+global:
+  domain: radiology.care.example.com
+  imagePullPolicy: IfNotPresent
+  storageClass: gp3  # AWS EBS gp3, adjust for your cloud provider
+
+# PostgreSQL Database
+postgresql:
+  enabled: true
+  auth:
+    username: postgres
+    password: "CHANGE_ME_STRONG_PASSWORD_HERE"  # ⚠️ CHANGE THIS
+    database: dicom
+  primary:
+    persistence:
+      enabled: true
+      size: 50Gi  # Increased for production
+      storageClass: gp3
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 1000m
+      limits:
+        memory: 4Gi
+        cpu: 2000m
+    # Enable automated backups
+    initdb:
+      scripts:
+        init-dcm4chee.sql: |
+          CREATE DATABASE dicom;
+          \c dicom;
+          GRANT ALL PRIVILEGES ON DATABASE dicom TO postgres;
+
+    # Configure PostgreSQL settings
+    extraEnvVars:
+      - name: POSTGRESQL_MAX_CONNECTIONS
+        value: "200"
+      - name: POSTGRESQL_SHARED_BUFFERS
+        value: "512MB"
+      - name: POSTGRESQL_EFFECTIVE_CACHE_SIZE
+        value: "2GB"
+
+  # Enable metrics for monitoring
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+  # Enable automated backups
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"  # 2 AM daily
+
+# Redis Cache
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "CHANGE_ME_REDIS_PASSWORD"  # ⚠️ CHANGE THIS
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClass: gp3
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 250m
+      limits:
+        memory: 1Gi
+        cpu: 1000m
+  replica:
+    replicaCount: 2  # Enable replicas for HA
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 250m
+      limits:
+        memory: 1Gi
+        cpu: 1000m
+  metrics:
+    enabled: true
+
+# MinIO Object Storage
+minio:
+  enabled: true
+  mode: distributed  # High availability mode
+  auth:
+    rootUser: "CHANGE_ME_MINIO_USER"  # ⚠️ CHANGE THIS
+    rootPassword: "CHANGE_ME_MINIO_PASSWORD"  # ⚠️ CHANGE THIS
+  persistence:
+    enabled: true
+    size: 500Gi  # Adjust based on expected DICOM volume
+    storageClass: gp3
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 1000m
+    limits:
+      memory: 4Gi
+      cpu: 2000m
+  defaultBuckets: "dicom-storage"
+
+  # Enable versioning for disaster recovery
+  buckets:
+    - name: dicom-storage
+      policy: none
+      versioning: true
+      objectlocking: false
+
+  # TLS configuration
+  tls:
+    enabled: true
+    certSecret: minio-tls-secret
+
+# OpenLDAP
+ldap:
+  enabled: true
+  image:
+    repository: osixia/openldap
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2  # HA setup
+
+  env:
+    LDAP_ORGANISATION: "Care Radiology"
+    LDAP_DOMAIN: "radiology.care.example.com"
+    LDAP_ADMIN_PASSWORD: "CHANGE_ME_LDAP_ADMIN_PASSWORD"  # ⚠️ CHANGE THIS
+    LDAP_CONFIG_PASSWORD: "CHANGE_ME_LDAP_CONFIG_PASSWORD"  # ⚠️ CHANGE THIS
+    LDAP_TLS: "true"
+    LDAP_TLS_VERIFY_CLIENT: "try"
+
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: gp3
+
+  service:
+    type: ClusterIP
+    port: 389
+
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+# DCM4CHEE PACS Archive
+dcm4chee:
+  enabled: true
+  image:
+    repository: dcm4che/dcm4chee-arc-psql
+    tag: "5.34.1"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2  # HA setup with load balancing
+
+  env:
+    # PostgreSQL connection
+    POSTGRES_HOST: care-radiology-postgresql
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: dicom
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: "CHANGE_ME_STRONG_PASSWORD_HERE"  # ⚠️ Same as PostgreSQL password
+
+    # LDAP connection
+    LDAP_URL: "ldap://care-radiology-ldap:389"
+    LDAP_BASE_DN: "dc=radiology,dc=care,dc=example,dc=com"
+    LDAP_ROOTPASS: "CHANGE_ME_LDAP_ADMIN_PASSWORD"  # ⚠️ Same as LDAP password
+    LDAP_CONFIGPASS: "CHANGE_ME_LDAP_CONFIG_PASSWORD"  # ⚠️ Same as LDAP config password
+
+    # Wildfly settings
+    WILDFLY_ADMIN_USER: admin
+    WILDFLY_ADMIN_PASSWORD: "CHANGE_ME_WILDFLY_PASSWORD"  # ⚠️ CHANGE THIS
+    WILDFLY_WAIT_FOR: "care-radiology-ldap:389 care-radiology-postgresql:5432"
+
+    # Archive settings
+    ARCHIVE_DEVICE_NAME: "dcm4chee-arc-prod"
+    AE_TITLE: "DCM4CHEE_PROD"
+    DICOM_PORT: "11112"
+
+    # Storage configuration (MinIO)
+    STORAGE_ACCESS_KEY: "CHANGE_ME_MINIO_USER"  # ⚠️ Same as MinIO user
+    STORAGE_SECRET_KEY: "CHANGE_ME_MINIO_PASSWORD"  # ⚠️ Same as MinIO password
+    STORAGE_ENDPOINT: "https://care-radiology-minio:9000"  # HTTPS in production
+    STORAGE_BUCKET: "dicom-storage"
+
+    # JVM settings for production
+    JAVA_OPTS: "-Xms4g -Xmx6g -XX:MetaspaceSize=512m -XX:MaxMetaspaceSize=1024m"
+
+  service:
+    type: ClusterIP
+    ports:
+      http: 8080
+      dicom: 11112
+      hl7: 2575
+
+  persistence:
+    enabled: true
+    size: 20Gi  # Increased for production logs
+    storageClass: gp3
+
+  resources:
+    requests:
+      memory: 6Gi
+      cpu: 2000m
+    limits:
+      memory: 8Gi
+      cpu: 4000m
+
+  # Production-ready probes
+  livenessProbe:
+    httpGet:
+      path: /dcm4chee-arc/ui2
+      port: 8080
+    initialDelaySeconds: 300
+    periodSeconds: 30
+    timeoutSeconds: 15
+    failureThreshold: 5
+
+  readinessProbe:
+    httpGet:
+      path: /dcm4chee-arc/ui2
+      port: 8080
+    initialDelaySeconds: 240
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  # Affinity rules for HA
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - care-radiology-dcm4chee
+          topologyKey: kubernetes.io/hostname
+
+# OHIF Viewer
+ohif:
+  enabled: true
+  image:
+    repository: ohif/viewer
+    tag: "v3.9.2"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 3  # Multiple replicas for HA
+
+  config:
+    dicomWebEndpoint: "https://radiology.care.example.com/dicomweb"
+
+    appConfig: |
+      window.config = {
+        routerBasename: '/',
+        showStudyList: true,
+        maxNumRequests: {
+          interaction: 100,
+          thumbnail: 75,
+          prefetch: 25,
+        },
+        // Production OHIF configuration
+        dataSources: [
+          {
+            friendlyName: 'Care Radiology PACS',
+            namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
+            sourceName: 'dicomweb',
+            configuration: {
+              name: 'DCM4CHEE Production',
+              wadoUriRoot: 'https://radiology.care.example.com/dicomweb',
+              qidoRoot: 'https://radiology.care.example.com/dicomweb',
+              wadoRoot: 'https://radiology.care.example.com/dicomweb',
+              qidoSupportsIncludeField: true,
+              supportsReject: true,
+              imageRendering: 'wadors',
+              thumbnailRendering: 'wadors',
+              enableStudyLazyLoad: true,
+              supportsFuzzyMatching: true,
+              supportsWildcard: true,
+              staticWado: true,
+              singlepart: 'bulkdata,video',
+              bulkDataURI: {
+                enabled: true,
+              },
+            },
+          },
+        ],
+      };
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+  # Affinity for spreading across nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - care-radiology-ohif
+            topologyKey: kubernetes.io/hostname
+
+# Nginx Reverse Proxy
+nginx:
+  enabled: true
+  image:
+    repository: nginx
+    tag: "1.25-alpine"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 3  # Multiple replicas for HA
+
+  config:
+    nginx.conf: |
+      events {
+          worker_connections 2048;
+      }
+
+      http {
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+
+          # Logging
+          log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                         '$status $body_bytes_sent "$http_referer" '
+                         '"$http_user_agent" "$http_x_forwarded_for"';
+
+          access_log /var/log/nginx/access.log main;
+          error_log /var/log/nginx/error.log warn;
+
+          # Performance tuning
+          sendfile on;
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          types_hash_max_size 2048;
+          client_max_body_size 2G;  # Large DICOM uploads
+
+          # Gzip compression
+          gzip on;
+          gzip_vary on;
+          gzip_proxied any;
+          gzip_comp_level 6;
+          gzip_types text/plain text/css text/xml text/javascript
+                     application/json application/javascript application/xml+rss
+                     application/atom+xml image/svg+xml;
+
+          # Rate limiting
+          limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+          limit_req_zone $binary_remote_addr zone=upload:10m rate=5r/s;
+
+          upstream ohif {
+              least_conn;
+              server care-radiology-ohif:80 max_fails=3 fail_timeout=30s;
+          }
+
+          upstream arc {
+              least_conn;
+              server care-radiology-dcm4chee:8080 max_fails=3 fail_timeout=30s;
+          }
+
+          server {
+              listen 80;
+              server_name radiology.care.example.com;
+
+              # Security headers
+              add_header X-Frame-Options "SAMEORIGIN" always;
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header X-XSS-Protection "1; mode=block" always;
+              add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+              # OHIF Viewer
+              location / {
+                  limit_req zone=api burst=20 nodelay;
+
+                  proxy_pass http://ohif;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_buffering off;
+              }
+
+              # DICOMweb endpoints (requires authentication)
+              location /dicomweb/ {
+                  limit_req zone=upload burst=10 nodelay;
+
+                  # CORS preflight
+                  if ($request_method = OPTIONS) {
+                      add_header 'Access-Control-Allow-Origin' 'https://radiology.care.example.com' always;
+                      add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+                      add_header 'Access-Control-Allow-Headers' '*' always;
+                      add_header 'Access-Control-Allow-Credentials' 'true' always;
+                      add_header 'Access-Control-Max-Age' '3600' always;
+                      return 204;
+                  }
+
+                  # Authentication check (calls Care backend)
+                  auth_request /authenticate;
+
+                  # Clear authorization headers before proxying to DCM4CHEE
+                  proxy_set_header authorization "";
+                  proxy_set_header Authorization "";
+
+                  # Proxy to DCM4CHEE
+                  proxy_pass http://arc/dcm4chee-arc/aets/DCM4CHEE_PROD/rs/;
+                  proxy_set_header HOST $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header Accept application/json;
+
+                  # Timeout settings for large uploads
+                  proxy_connect_timeout 600s;
+                  proxy_send_timeout 600s;
+                  proxy_read_timeout 600s;
+                  send_timeout 600s;
+              }
+
+              # Authentication endpoint (internal)
+              location = /authenticate {
+                  internal;
+                  proxy_pass http://care-backend.care.svc.cluster.local:9000/api/care_radiology/v1/dicom/authenticate/;
+                  proxy_set_header HOST $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header Accept application/json;
+                  proxy_pass_request_body off;
+                  proxy_set_header Content-Length "";
+              }
+
+              # Health check endpoint
+              location /health {
+                  access_log off;
+                  return 200 "healthy\n";
+                  add_header Content-Type text/plain;
+              }
+          }
+      }
+
+  service:
+    type: ClusterIP  # Use with Ingress
+    port: 80
+    annotations:
+      # AWS ALB annotations (if using AWS)
+      # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      # service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+
+  # Affinity for spreading across nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - care-radiology-nginx
+            topologyKey: kubernetes.io/hostname
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: nginx  # Or alb, traefik, etc.
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "2048m"  # 2GB for DICOM uploads
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # WAF rules (if using ModSecurity)
+    # nginx.ingress.kubernetes.io/enable-modsecurity: "true"
+    # nginx.ingress.kubernetes.io/modsecurity-snippet: |
+    #   SecRuleEngine On
+
+  hosts:
+    - host: radiology.care.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls:
+    - secretName: radiology-tls
+      hosts:
+        - radiology.care.example.com
+
+# Care Backend integration
+careBackend:
+  serviceName: care-backend.care.svc.cluster.local
+  servicePort: 9000
