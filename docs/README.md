@@ -120,7 +120,30 @@ This directory contains comprehensive technical documentation for the care_radio
 
 ---
 
-### 6. [EXTERNAL_SERVICES.md](./EXTERNAL_SERVICES.md)
+### 6. [API_SPECIFICATION_REVIEW.md](./API_SPECIFICATION_REVIEW.md)
+**API best practices review and FHIR enhancement recommendations**
+- 38 actionable recommendations across 7 categories
+- Critical issues (API versioning, FHIR endpoints, report status)
+- REST API best practices (naming, pagination, error handling)
+- Database design improvements (encounter link, metadata caching)
+- FHIR compliance gaps (ImagingStudy, search parameters, Provenance)
+- Security concerns (rate limiting, API key rotation, encryption)
+- Performance optimizations (indexes, background jobs, caching)
+- Implementation priority matrix (P0, P1, P2)
+
+**Target Audience**: Technical Architects, Backend Developers, Product Managers
+
+**Key Sections**:
+- Critical issues (P0): Status workflow, FHIR endpoints, security fixes
+- REST API inconsistencies: Naming conventions, pagination, HATEOAS
+- Database enhancements: Encounter FK, DICOM metadata caching, soft delete manager
+- FHIR gaps: ImagingStudy.series, CodeableConcept, search parameters
+- Security: Rate limiting, API key rotation, field-level encryption
+- Priority matrix: Effort/impact analysis for all 38 recommendations
+
+---
+
+### 7. [EXTERNAL_SERVICES.md](./EXTERNAL_SERVICES.md)
 **Comprehensive guide to all external services**
 
 #### OHIF Viewer
@@ -164,15 +187,16 @@ This directory contains comprehensive technical documentation for the care_radio
 
 ```
 docs/
-├── README.md                      (This file - Documentation index)
-├── API_SPECIFICATION.md           (Complete API spec & database schema)
-├── API_UPLOAD_ENDPOINT.md         (Upload API deep dive)
-├── API_QUERY_ENDPOINT.md          (Query API deep dive)
-├── DCM4CHEE_INTEGRATION.md        (PACS integration guide)
-├── EXTERNAL_SERVICES.md           (OHIF, MinIO, LDAP, Nginx)
-└── FHIR_ANALYSIS.md               (FHIR R4 compliance analysis)
+├── README.md                        (This file - Documentation index)
+├── API_SPECIFICATION.md             (Complete API spec & database schema)
+├── API_SPECIFICATION_REVIEW.md      (API review & FHIR recommendations)
+├── API_UPLOAD_ENDPOINT.md           (Upload API deep dive)
+├── API_QUERY_ENDPOINT.md            (Query API deep dive)
+├── DCM4CHEE_INTEGRATION.md          (PACS integration guide)
+├── EXTERNAL_SERVICES.md             (OHIF, MinIO, LDAP, Nginx)
+└── FHIR_ANALYSIS.md                 (FHIR R4 compliance analysis)
 
-../ARCHITECTURE.md                  (High-level architecture overview)
+../ARCHITECTURE.md                    (High-level architecture overview)
 ```
 
 ---
@@ -299,6 +323,7 @@ else:
 |----------|---------|--------------|---------------|
 | ARCHITECTURE.md | 2.0 | 2026-04-22 | Added reporting system, worklist, updated models |
 | API_SPECIFICATION.md | 1.0 | 2026-04-23 | **NEW**: Complete API spec with database schema, ERD, 26 endpoints |
+| API_SPECIFICATION_REVIEW.md | 1.0 | 2026-04-23 | **NEW**: 38 recommendations for best practices & FHIR compliance |
 | API_UPLOAD_ENDPOINT.md | 1.0 | 2025-04-16 | Complete upload API documentation |
 | API_QUERY_ENDPOINT.md | 1.0 | 2025-04-16 | Complete query API documentation |
 | DCM4CHEE_INTEGRATION.md | 1.0 | 2025-04-16 | Complete DCM4CHEE integration guide |
