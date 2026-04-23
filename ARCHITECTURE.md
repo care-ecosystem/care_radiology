@@ -1,17 +1,57 @@
 # Care Radiology Plugin - Architecture Documentation
 
+## Document Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 2.0 | 2026-04-22 | **Major Update**: Added comprehensive reporting system documentation including StudyReport, StudyReportAudit, ModalityType, BodyPart, ScanProtocol, Template models; new API endpoints for reporting; worklist functionality; updated authentication and authorization; complete reports workflow documentation |
+| 1.0 | 2025-04-16 | Initial comprehensive architecture documentation |
+
+## Latest Updates (v2.0)
+
+**New Features**:
+- ✅ **Radiology Reporting System**: Complete CRUD for structured reports with technique/findings/impression
+- ✅ **Audit Trail**: Automatic change tracking for all report modifications (HIPAA compliance)
+- ✅ **Configuration Management**: Hierarchical modality → body part → scan protocol setup
+- ✅ **Template System**: User-specific report templates for faster report generation
+- ✅ **Worklist API**: Query pending radiology service requests with filtering
+- ✅ **Report Status Tracking**: `has_report` annotation on DICOM studies
+- ✅ **Enhanced Permissions**: Fine-grained `can_read_radiology_report` and `can_write_radiology_report`
+- ✅ **Static API Key Auth**: For webhooks and worklist endpoints
+
+**New Models**:
+- StudyReport, StudyReportAudit, ModalityType, BodyPart, ScanProtocol, Template
+
+**New API Endpoints**:
+- `/dicom/worklist/`, `/study_report/`, `/study-report-audits/`, `/modality_type/`, `/body_part/`, `/scan_protocol/`, `/template/`
+
+---
+
 ## Table of Contents
 1. [Overview](#overview)
 2. [Architecture Diagram](#architecture-diagram)
 3. [Technology Stack](#technology-stack)
 4. [Database Models](#database-models)
+   - DicomStudy, RadiologyServiceRequest, RadiologyWebhookLogs
+   - **NEW**: StudyReport, StudyReportAudit
+   - **NEW**: ModalityType, BodyPart, ScanProtocol, Template
 5. [API Endpoints](#api-endpoints)
+   - DICOM Operations (upload, studies, service-requests, worklist)
+   - **NEW**: Reporting (study_report, study-report-audits)
+   - **NEW**: Configuration (modality_type, body_part, scan_protocol, template)
+   - Webhooks
 6. [Service Integrations](#service-integrations)
-7. [DICOM Workflows](#dicom-workflows)
-8. [Authentication & Authorization](#authentication--authorization)
-9. [Docker Infrastructure](#docker-infrastructure)
-10. [Configuration](#configuration)
-11. [Deployment Guide](#deployment-guide)
+7. [**NEW**: Reports Workflow](#reports-workflow)
+   - Report Creation Workflow
+   - Report Status Tracking
+   - Template Workflow
+   - Compliance Features
+8. [DICOM Workflows](#dicom-workflows)
+9. [Authentication & Authorization](#authentication--authorization)
+   - **NEW**: Report Permissions
+10. [Docker Infrastructure](#docker-infrastructure)
+11. [Configuration](#configuration)
+12. [Deployment Guide](#deployment-guide)
 
 ---
 
@@ -207,6 +247,8 @@ class DicomStudy(EMRBaseModel):
 - One DICOM study → Many service requests (via RadiologyServiceRequest)
 
 ---
+
+-- review comments i feel it should be encounter to dicom study 
 
 ### RadiologyServiceRequest
 
@@ -1373,6 +1415,301 @@ dcmProperty: secretKey=minioadmin
    ```
 3. DCM4CHEE reads config from LDAP
 4. Images stored in MinIO at `s3://dicom-bucket/studies/{study_uid}/...`
+
+---
+
+## Reports Workflow
+
+### Overview
+
+The care_radiology plugin provides a complete radiology reporting system that allows radiologists to create, edit, and manage structured reports for DICOM studies.
+
+**Key Components**:
+1. **ModalityType, BodyPart, ScanProtocol** - Hierarchical configuration
+2. **Template** - Pre-filled report templates for common study types
+3. **StudyReport** - Actual radiology reports with technique/findings/impression
+4. **StudyReportAudit** - Complete change tracking for compliance
+
+---
+
+### Report Creation Workflow
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 1: Configure System (Admin/Setup)                            │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Create ModalityType: CT
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  POST /modality_type/                                               │
+│  {                                                                  │
+│    "display_name": "Computed Tomography",                          │
+│    "coding": [{"system": "SNOMED", "code": "77477000"}]           │
+│  }                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Create BodyPart: Brain (under CT)
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  POST /body_part/                                                   │
+│  {                                                                  │
+│    "modality": "<ct-uuid>",                                        │
+│    "display_name": "Brain",                                        │
+│    "coding": [{"system": "SNOMED", "code": "12738006"}]           │
+│  }                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Create ScanProtocol: CT Brain without Contrast
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  POST /scan_protocol/                                               │
+│  {                                                                  │
+│    "modality": "<ct-uuid>",                                        │
+│    "body_part": "<brain-uuid>",                                    │
+│    "display_name": "CT Brain without Contrast",                   │
+│    "coding": [{"system": "CPT", "code": "70450"}]                 │
+│  }                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 2: Create Template (Radiologist - Optional)                  │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Save frequently used report as template
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  POST /template/                                                    │
+│  {                                                                  │
+│    "modality": "<ct-uuid>",                                        │
+│    "body_part": "<brain-uuid>",                                    │
+│    "scan_protocol": "<protocol-uuid>",                            │
+│    "technique": "Standard brain imaging protocol...",             │
+│    "findings": "The brain parenchyma...",                         │
+│    "impression": "Normal CT brain."                               │
+│  }                                                                  │
+│  Response: template-uuid                                           │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 3: DICOM Study Uploaded                                      │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ (See DICOM Upload Workflow below)
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  DicomStudy created                                                 │
+│  - study_uid: "1.2.840.113619..."                                  │
+│  - patient: Patient object                                         │
+│  - has_report: false (initially)                                   │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 4: Create Report (Radiologist)                               │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Option A: From scratch
+    │ Option B: From template (pre-fills fields)
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  POST /study_report/                                                │
+│  {                                                                  │
+│    "study": "<dicom-study-uuid>",                                  │
+│    "modality": "<ct-uuid>",                                        │
+│    "body_part": "<brain-uuid>",                                    │
+│    "scan_protocol": "<protocol-uuid>",                            │
+│    "technique": "Non-contrast CT brain...",                       │
+│    "findings": "No acute intracranial abnormality...",            │
+│    "impression": "Normal CT brain."                               │
+│  }                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Backend Processing
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  1. Authorize: can_write_radiology_report                          │
+│  2. Create StudyReport record                                      │
+│  3. Auto-create StudyReportAudit entry:                            │
+│     - action: "CREATED"                                            │
+│     - field_name: null                                             │
+│     - created_by: current user                                     │
+│  4. Return success                                                 │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 5: Edit Report (Radiologist)                                 │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Update findings after consultation
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  PATCH /study_report/<uuid>/                                        │
+│  {                                                                  │
+│    "findings": "Updated: Small lacunar infarct...",               │
+│    "impression": "Acute lacunar infarct..."                       │
+│  }                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Backend Processing
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  1. Authorize: can_write_radiology_report                          │
+│  2. Load existing StudyReport                                      │
+│  3. For each changed field:                                        │
+│     Create StudyReportAudit entry:                                 │
+│     - action: "UPDATED"                                            │
+│     - field_name: "findings" or "impression"                       │
+│     - old_value: previous value (JSON)                            │
+│     - new_value: new value (JSON)                                 │
+│     - created_by: current user                                     │
+│  4. Update StudyReport                                             │
+│  5. Return success                                                 │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Step 6: View Audit Trail (Compliance/QA)                          │
+└────────────────────────────────────────────────────────────────────┘
+    │
+    │ Review all changes to report
+    ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  GET /study-report-audits/?study_report=<uuid>                     │
+│                                                                     │
+│  Response: [                                                        │
+│    {                                                                │
+│      "action": "UPDATED",                                          │
+│      "field_name": "impression",                                   │
+│      "old_value": "Normal CT brain.",                             │
+│      "new_value": "Acute lacunar infarct...",                     │
+│      "created_by": "dr.smith",                                     │
+│      "created_datetime": "2025-04-16T14:30:00Z"                   │
+│    },                                                               │
+│    {                                                                │
+│      "action": "CREATED",                                          │
+│      "created_by": "dr.smith",                                     │
+│      "created_datetime": "2025-04-16T11:00:00Z"                   │
+│    }                                                                │
+│  ]                                                                  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Report Status Tracking
+
+**has_report Annotation**:
+
+```python
+# In DICOM API queries
+studies = DicomStudy.objects.filter(patient=patient)
+
+# Enhanced in dicom.py fetch_study()
+study_metadata = {
+    "study_uid": study_uid,
+    "study_date": "...",
+    "study_description": "...",
+    "has_report": DicomStudy.objects.filter(
+        dicom_study_uid=study_uid,
+        study_reports__isnull=False
+    ).exists()
+}
+```
+
+**UI Integration**:
+```javascript
+// In Care Frontend
+studies.forEach(study => {
+  if (study.has_report) {
+    showReportIcon(study);  // Display "Report Available" badge
+  } else {
+    showCreateReportButton(study);  // Display "Create Report" button
+  }
+});
+```
+
+---
+
+### Template Workflow
+
+**Purpose**: Speed up report generation for common study types
+
+**Example Scenario**:
+```
+Radiologist frequently reports "Normal CT Brain" studies:
+1. Create template with standard findings/impression
+2. When new CT brain arrives:
+   - Select template from dropdown
+   - System pre-fills technique, findings, impression
+   - Radiologist reviews and modifies as needed
+   - Save as new StudyReport
+3. Template remains unchanged for future use
+```
+
+**Template API Usage**:
+```javascript
+// Frontend: Load user's templates
+fetch('/api/care_radiology/template/', {
+  headers: { 'Authorization': `Bearer ${token}` }
+})
+.then(r => r.json())
+.then(templates => {
+  // Filter templates by selected modality/body part
+  const matchingTemplates = templates.filter(t =>
+    t.modality.id === selectedModality &&
+    t.body_part.id === selectedBodyPart
+  );
+
+  // Populate dropdown
+  showTemplateDropdown(matchingTemplates);
+});
+
+// User selects template
+function applyTemplate(template) {
+  document.getElementById('technique').value = template.technique;
+  document.getElementById('findings').value = template.findings;
+  document.getElementById('impression').value = template.impression;
+}
+
+// Save as new report (template unchanged)
+createReport({
+  study: currentStudy.id,
+  modality: template.modality.id,
+  body_part: template.body_part.id,
+  scan_protocol: template.scan_protocol.id,
+  technique: document.getElementById('technique').value,
+  findings: document.getElementById('findings').value,
+  impression: document.getElementById('impression').value
+});
+```
+
+---
+
+### Compliance Features
+
+**HIPAA Compliance**:
+1. **Audit Trail**: Every report change logged in StudyReportAudit
+2. **User Attribution**: created_by and updated_by tracked automatically
+3. **Timestamp**: Precise datetime for all changes
+4. **Immutable Logs**: Audit entries read-only, cannot be deleted
+5. **Field-Level Tracking**: Know exactly which fields changed and when
+
+**Query Audit Trail**:
+```sql
+-- All changes to a specific report
+SELECT
+    sra.action,
+    sra.field_name,
+    sra.old_value,
+    sra.new_value,
+    u.username AS modified_by,
+    sra.created_datetime
+FROM radiology_studyreportaudit sra
+JOIN auth_user u ON sra.created_by_id = u.id
+WHERE sra.study_report_id = (
+    SELECT id FROM radiology_studyreport WHERE external_id = '<report-uuid>'
+)
+ORDER BY sra.created_datetime DESC;
+```
 
 ---
 
