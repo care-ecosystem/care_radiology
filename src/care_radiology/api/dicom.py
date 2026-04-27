@@ -293,18 +293,21 @@ def fetch_study(dicom_study: DicomStudy):
     if study is None:
         return None
 
-    series = [
-        {
-            "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
+    series = []
+    for s in d_query_series_for_study(study_uid):
+        series_uid_list = d_find(s, DICOM_TAG.SeriesInstanceUID.value)
+        if not series_uid_list:
+            continue  # Skip series without a valid UID
+
+        series.append({
+            "series_uid": series_uid_list[0],
             "series_number": d_find(s, DICOM_TAG.SeriesNumber.value),
             "series_instance_count": d_find(
                 s, DICOM_TAG.NumberOfSeriesRelatedInstances.value
             ),
             "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
             "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
-        }
-        for s in d_query_series_for_study(study_uid)
-    ]
+        })
 
     study_description = (
         d_find(study, DICOM_TAG.StudyDescription.value)[0]
@@ -312,9 +315,12 @@ def fetch_study(dicom_study: DicomStudy):
         else None
     )
 
+    study_date_raw = d_find(study, DICOM_TAG.StudyDate.value)
+    study_time_raw = d_find(study, DICOM_TAG.StudyTime.value)
+
     study_date = d_datetime_to_iso(
-        d_find(study, DICOM_TAG.StudyDate.value)[0],
-        d_find(study, DICOM_TAG.StudyTime.value)[0],
+        study_date_raw[0] if study_date_raw else None,
+        study_time_raw[0] if study_time_raw else None,
     )
 
     cachable = {
