@@ -1,0 +1,130 @@
+---
+# ConfigMap with initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcm4chee-init-scripts
+  namespace: care
+  labels:
+    app: care-radiology
+    component: dcm4chee-init
+data:
+  init-ldap.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Waiting for LDAP to be ready..."
+    until ldapsearch -x -H ldap://radiology-ldap:389 -D "cn=admin,dc=dcm4che,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "dc=dcm4che,dc=org" > /dev/null 2>&1; do
+      echo "LDAP not ready, waiting..."
+      sleep 5
+    done
+    echo "LDAP is ready!"
+
+    echo "Checking if DCM4CHEE configuration exists in LDAP..."
+    if ldapsearch -x -H ldap://radiology-ldap:389 -D "cn=admin,dc=dcm4che,dc=org" -w "$LDAP_ADMIN_PASSWORD" -b "dicomDeviceName=dcm4chee-arc,cn=Devices,cn=DICOM Configuration,dc=dcm4che,dc=org" | grep "dicomDeviceName=dcm4chee-arc" > /dev/null; then
+      echo "DCM4CHEE configuration already exists in LDAP"
+      echo "Applying MinIO bucket configuration..."
+
+      # Apply MinIO storage configuration
+      cat <<EOF | ldapmodify -x -H ldap://radiology-ldap:389 -D "cn=admin,dc=dcm4che,dc=org" -w "$LDAP_ADMIN_PASSWORD"
+    dn: dcmStorageID=fs1,dicomDeviceName=dcm4chee-arc,cn=Devices,cn=DICOM Configuration,dc=dcm4che,dc=org
+    changetype: modify
+    replace: dcmURI
+    dcmURI: jclouds:s3:http://minio:9000
+    -
+    add: dcmProperty
+    dcmProperty: container=dicom-storage
+    dcmProperty: containerExists=true
+    dcmProperty: endpoint=http://minio:9000
+    dcmProperty: credential=$MINIO_SECRET_KEY
+    dcmProperty: identity=$MINIO_ACCESS_KEY
+    dcmProperty: jclouds.relax-hostname=true
+    dcmProperty: jclouds.s3.path-style-access=true
+    dcmProperty: jclouds.s3.virtual-host-buckets=false
+    dcmProperty: jclouds.strip-expect-header=true
+    dcmProperty: jclouds.trust-all-certs=true
+    dcmProperty: streamingUpload=false
+    -
+    EOF
+
+      echo "MinIO configuration applied successfully!"
+    else
+      echo "WARNING: DCM4CHEE configuration not found in LDAP"
+      echo "DCM4CHEE needs to start at least once to create initial LDAP configuration"
+      echo "Please restart the DCM4CHEE pod after it creates the initial configuration"
+      exit 1
+    fi
+
+  wait-for-dcm4chee.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Waiting for DCM4CHEE to be ready..."
+    MAX_ATTEMPTS=60
+    ATTEMPT=0
+
+    while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+      if curl -sf http://radiology-dcm4chee:8080/dcm4chee-arc/aets > /dev/null 2>&1; then
+        echo "DCM4CHEE is ready!"
+        exit 0
+      fi
+      echo "DCM4CHEE not ready yet (attempt $((ATTEMPT+1))/$MAX_ATTEMPTS)..."
+      sleep 10
+      ATTEMPT=$((ATTEMPT+1))
+    done
+
+    echo "ERROR: DCM4CHEE did not become ready in time"
+    exit 1
+
+---
+# Job to initialize DCM4CHEE LDAP configuration
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dcm4chee-ldap-init
+  namespace: care
+  labels:
+    app: care-radiology
+    component: dcm4chee-init
+spec:
+  ttlSecondsAfterFinished: 86400  # Keep job for 24 hours
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      # Wait for DCM4CHEE to be running
+      - name: wait-for-dcm4chee
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "/scripts/wait-for-dcm4chee.sh"]
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+      containers:
+      - name: ldap-init
+        image: osixia/openldap:1.5.0
+        command: ["/bin/bash", "/scripts/init-ldap.sh"]
+        env:
+        - name: LDAP_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: radiology-secrets
+              key: LDAP_ADMIN_PASSWORD
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: care-secrets
+              key: BUCKET_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: care-secrets
+              key: BUCKET_SECRET
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+      volumes:
+      - name: scripts
+        configMap:
+          name: dcm4chee-init-scripts
+          defaultMode: 0755

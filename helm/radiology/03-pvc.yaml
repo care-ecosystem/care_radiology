@@ -1,0 +1,35 @@
+# Only PVCs for radiology-specific components
+# PostgreSQL, Redis, and MinIO use existing care PVCs
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radiology-ldap-data
+  namespace: care
+  labels:
+    app: care-radiology
+    component: ldap
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path  # Using default EKS storage class
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: radiology-dcm4chee-data
+  namespace: care
+  labels:
+    app: care-radiology
+    component: dcm4chee
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: local-path

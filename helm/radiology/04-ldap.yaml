@@ -1,0 +1,103 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radiology-ldap
+  namespace: care
+  labels:
+    app: care-radiology
+    component: ldap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: care-radiology
+      component: ldap
+  template:
+    metadata:
+      labels:
+        app: care-radiology
+        component: ldap
+    spec:
+      containers:
+      - name: ldap
+        image: osixia/openldap:1.5.0
+        ports:
+        - containerPort: 389
+          name: ldap
+        - containerPort: 636
+          name: ldaps
+        env:
+        - name: LDAP_ORGANISATION
+          value: "dcm4che.org"
+        - name: LDAP_DOMAIN
+          value: "dcm4che.org"
+        - name: LDAP_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: radiology-secrets
+              key: LDAP_ADMIN_PASSWORD
+        - name: LDAP_CONFIG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: radiology-secrets
+              key: LDAP_CONFIG_PASSWORD
+        - name: LDAP_TLS
+          value: "false"
+        - name: LDAP_TLS_VERIFY_CLIENT
+          value: "never"
+        - name: LDAP_READONLY_USER
+          value: "false"
+        - name: LDAP_LOG_LEVEL
+          value: "256"
+        volumeMounts:
+        - name: ldap-data
+          mountPath: /var/lib/ldap
+        - name: ldap-config
+          mountPath: /etc/ldap/slapd.d
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          tcpSocket:
+            port: 389
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 389
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: ldap-data
+        persistentVolumeClaim:
+          claimName: radiology-ldap-data
+      - name: ldap-config
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: radiology-ldap
+  namespace: care
+  labels:
+    app: care-radiology
+    component: ldap
+spec:
+  type: ClusterIP
+  ports:
+  - port: 389
+    targetPort: 389
+    protocol: TCP
+    name: ldap
+  - port: 636
+    targetPort: 636
+    protocol: TCP
+    name: ldaps
+  selector:
+    app: care-radiology
+    component: ldap

@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radiology-config
+  namespace: care
+  labels:
+    app: care-radiology
+data:
+  # Domain configuration
+  DOMAIN: "radiology.care-k3s.digit.org"
+
+  # PostgreSQL configuration (using existing care postgres)
+  POSTGRES_HOST: "postgres-care-rw"  # Existing care PostgreSQL service
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "dicom"  # New database in existing PostgreSQL
+  POSTGRES_MAX_CONNECTIONS: "200"
+  POSTGRES_SHARED_BUFFERS: "512MB"
+  POSTGRES_EFFECTIVE_CACHE_SIZE: "2GB"
+
+  # Redis configuration (using existing care redis)
+  REDIS_HOST: "redis"  # Existing care Redis service
+  REDIS_PORT: "6379"
+
+  # MinIO configuration (using existing care minio)
+  MINIO_ENDPOINT: "http://minio:9000"  # Existing care MinIO service
+  MINIO_BUCKET: "dicom-storage"
+  MINIO_SECURE: "false"
+
+  # LDAP configuration (radiology-specific)
+  # DCM4CHEE expects dc=dcm4che,dc=org as base DN
+  LDAP_URL: "ldap://radiology-ldap:389"
+  LDAP_BASE_DN: "dc=dcm4che,dc=org"
+  LDAP_ORGANISATION: "dcm4che.org"
+  LDAP_DOMAIN: "dcm4che.org"
+
+  # DCM4CHEE configuration
+  ARCHIVE_DEVICE_NAME: "dcm4chee-arc-prod"
+  AE_TITLE: "DCM4CHEE_PROD"
+  DICOM_PORT: "11112"
+  WILDFLY_WAIT_FOR: "radiology-ldap:389 postgres-care-rw:5432"
+
+  # JVM settings
+  JAVA_OPTS: "-Xms4g -Xmx6g -XX:MetaspaceSize=512m -XX:MaxMetaspaceSize=1024m"
+
+  # Care backend integration
+  CARE_BACKEND_URL: "http://care-backend:9000"
