@@ -28,6 +28,7 @@ from care_radiology.models.study_report import StudyReport
 
 DCM4CHEE_BASEURL = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL']
 STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
+ACCEPT_JSON = "application/json"
 
 class StaticAPIKeyAuthentication(BaseAuthentication, BasePermission):
     def authenticate(self, request):
@@ -63,7 +64,9 @@ class DICOM_TAG(Enum):
     SOPInstanceUID = "00080018"
     ReferencedInstanceUID = "00081155"
 
-    ReferencedSOPSQ = "00081199"
+    # SOP Sequence Tags
+    ReferencedSOPSQ = "00081199"  # For successful uploads
+    FailedSOPSQ = "00081198"      # For duplicate/conflict (409) responses
 
 
 class DicomViewSet(ViewSet):
@@ -139,19 +142,40 @@ class DicomViewSet(ViewSet):
                 data = upload_response.json()
 
                 try:
-                    ref_sop = d_find(data, DICOM_TAG.ReferencedSOPSQ.value)[0]
+                    # Try ReferencedSOPSQ first (for successful uploads)
+                    ref_sop_list = d_find(data, DICOM_TAG.ReferencedSOPSQ.value)
 
-                    instance_uid = d_find(
+                    # If not found, try FailedSOPSQ (for 409 conflicts/duplicates)
+                    if not ref_sop_list:
+                        ref_sop_list = d_find(data, DICOM_TAG.FailedSOPSQ.value)
+
+                    if not ref_sop_list:
+                        raise ValueError("No SOP sequence found in response")
+
+                    ref_sop = ref_sop_list[0]
+
+                    instance_uid_list = d_find(
                         ref_sop, DICOM_TAG.ReferencedInstanceUID.value
-                    )[0]
+                    )
 
-                    study_uid = d_find(
-                        d_query_instance(instance_uid),
-                        DICOM_TAG.StudyInstanceUID.value
-                    )[0]
+                    if not instance_uid_list:
+                        raise ValueError("No instance UID found in SOP sequence")
+
+                    instance_uid = instance_uid_list[0]
+
+                    # Get study UID from DCM4CHEE query
+                    instance_data = d_query_instance(instance_uid)
+                    if instance_data:
+                        study_uid_list = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)
+                        if study_uid_list:
+                            study_uid = study_uid_list[0]
+                        else:
+                            raise ValueError("No study UID found in instance data")
+                    else:
+                        raise ValueError(f"Instance {instance_uid} not found in DCM4CHEE")
 
                 except Exception as parse_error:
-                    print("DICOM parse error:", str(parse_error))
+                    print(f"DICOM parse error: {parse_error}")
                     study_uid = None
 
                 # ✅ Store mapping only if available
@@ -164,23 +188,6 @@ class DicomViewSet(ViewSet):
 
                     # Bust cache
                     cache.delete(f"radiology:dicom:study:{study_uid}")
-                # studies_qs = DicomStudy.objects.annotate(
-                #     has_report=Exists(
-                #         StudyReport.objects.filter(study=OuterRef('pk'))
-                #     )
-                # )
-
-                # (dicom_study, is_created) = DicomStudy.objects.update_or_create(
-                #     dicom_study_uid=study_uid,
-                #     patient=patient,
-                #     defaults={},
-                # )
-
-                # dicom_study = studies_qs.get(pk=dicom_study.pk)
-
-                # # Bust the study from cache
-                # key = f"radiology:dicom:study:{study_uid}"
-                # cache.delete(key)
 
                 return Response(
                     data={
@@ -222,7 +229,7 @@ class DicomViewSet(ViewSet):
 
         patient = Patient.objects.get(external_id=patient_external_id)
         if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
-            raise PermissionDenied(f"You do not have permission to view this patient")
+            raise PermissionDenied("You do not have permission to view this patient")
 
         report_exists = StudyReport.objects.filter(study=OuterRef('pk'))
         studies = DicomStudy.objects.filter(patient__external_id=patient_external_id).annotate(has_report=Exists(report_exists))
@@ -252,7 +259,7 @@ class DicomViewSet(ViewSet):
 
         service_request = ServiceRequest.objects.get(external_id=service_request_external_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
-            raise PermissionDenied(f"You do not have permission to view this service request")
+            raise PermissionDenied("You do not have permission to view this service request")
 
         report_exists = StudyReport.objects.filter(study=OuterRef("dicom_study__pk"))
         tsr = RadiologyServiceRequest.objects.filter(
@@ -391,7 +398,7 @@ def d_query_instance(instance_id):
     response = requests.get(
         url=f"{DCM4CHEE_BASEURL}/rs/instances",
         headers={
-            "Accept": "application/json",
+            "Accept": ACCEPT_JSON,
         },
         params={"SOPInstanceUID": instance_id},
     )
@@ -414,7 +421,7 @@ def d_query_series_for_study(study_id):
     response = requests.get(
         url=f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series",
         headers={
-            "Accept": "application/json",
+            "Accept": ACCEPT_JSON,
         },
     )
 
@@ -436,7 +443,7 @@ def d_query_study(study_uid):
     response = requests.get(
         url=f"{DCM4CHEE_BASEURL}/rs/studies",
         headers={
-            "Accept": "application/json",
+            "Accept": ACCEPT_JSON,
         },
         params={
             "StudyInstanceUID": study_uid,
@@ -513,8 +520,6 @@ def parse_date(date_str):
 # Multipart Related Encoder ---------------------------------------------------
 def encode_file_multipart_related(file_obj):
     import uuid
-
-    # filename = file_obj.name
 
     boundary = f"DICOMBOUNDARY-{uuid.uuid4().hex}"
     file_bytes = file_obj.read()
