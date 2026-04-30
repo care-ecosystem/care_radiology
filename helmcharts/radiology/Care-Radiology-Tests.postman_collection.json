@@ -1,0 +1,568 @@
+{
+	"info": {
+		"_postman_id": "care-radiology-tests",
+		"name": "Care Radiology Plugin - Test Collection",
+		"description": "Comprehensive test collection for Care Radiology components (DCM4CHEE, LDAP, Nginx, OHIF)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. Health Checks",
+			"item": [
+				{
+					"name": "DCM4CHEE - Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/ui2",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "ui2"]
+						},
+						"description": "Check if DCM4CHEE UI is accessible\n\nPort-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/radiology-dcm4chee 8080:8080"
+					},
+					"response": []
+				},
+				{
+					"name": "DCM4CHEE - DICOM Web Root",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs"]
+						},
+						"description": "Check DICOM Web (DICOMweb) service endpoint"
+					},
+					"response": []
+				},
+				{
+					"name": "Nginx Proxy - Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8888/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8888",
+							"path": ["health"]
+						},
+						"description": "Port-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/radiology-nginx 8888:80"
+					},
+					"response": []
+				},
+				{
+					"name": "OHIF Viewer - Root",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "3000",
+							"path": [""]
+						},
+						"description": "Port-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/radiology-ohif 3000:80"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "02. DCM4CHEE - QIDO-RS (Query)",
+			"item": [
+				{
+					"name": "Search All Studies",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies"]
+						},
+						"description": "Query all studies in PACS using QIDO-RS"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Studies by Patient Name",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies?PatientName=*DOE*",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies"],
+							"query": [
+								{
+									"key": "PatientName",
+									"value": "*DOE*",
+									"description": "Wildcard search for patient name"
+								}
+							]
+						},
+						"description": "Search studies by patient name using wildcard"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Studies by Date Range",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies?StudyDate=20260101-20261231&limit=10",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies"],
+							"query": [
+								{
+									"key": "StudyDate",
+									"value": "20260101-20261231",
+									"description": "Date range: YYYYMMDD-YYYYMMDD"
+								},
+								{
+									"key": "limit",
+									"value": "10",
+									"description": "Limit results"
+								}
+							]
+						},
+						"description": "Search studies within a date range"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Series for Study",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies/{{StudyInstanceUID}}/series",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies", "{{StudyInstanceUID}}", "series"]
+						},
+						"description": "Query all series for a specific study\n\nReplace {{StudyInstanceUID}} with actual Study Instance UID"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Instances in Series",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies/{{StudyInstanceUID}}/series/{{SeriesInstanceUID}}/instances",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies", "{{StudyInstanceUID}}", "series", "{{SeriesInstanceUID}}", "instances"]
+						},
+						"description": "Query instances within a specific series"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "03. DCM4CHEE - WADO-RS (Retrieve)",
+			"item": [
+				{
+					"name": "Retrieve Study Metadata",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies/{{StudyInstanceUID}}/metadata",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies", "{{StudyInstanceUID}}", "metadata"]
+						},
+						"description": "Retrieve all metadata for a study"
+					},
+					"response": []
+				},
+				{
+					"name": "Retrieve Instance",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "multipart/related; type=application/dicom",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies/{{StudyInstanceUID}}/series/{{SeriesInstanceUID}}/instances/{{SOPInstanceUID}}",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies", "{{StudyInstanceUID}}", "series", "{{SeriesInstanceUID}}", "instances", "{{SOPInstanceUID}}"]
+						},
+						"description": "Retrieve a DICOM instance"
+					},
+					"response": []
+				},
+				{
+					"name": "Retrieve Rendered Thumbnail",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "image/jpeg",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets/DCM4CHEE/rs/studies/{{StudyInstanceUID}}/series/{{SeriesInstanceUID}}/instances/{{SOPInstanceUID}}/rendered?viewport=100,100",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets", "DCM4CHEE", "rs", "studies", "{{StudyInstanceUID}}", "series", "{{SeriesInstanceUID}}", "instances", "{{SOPInstanceUID}}", "rendered"],
+							"query": [
+								{
+									"key": "viewport",
+									"value": "100,100",
+									"description": "Thumbnail size"
+								}
+							]
+						},
+						"description": "Retrieve rendered JPEG thumbnail of DICOM instance"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "04. DCM4CHEE - Admin APIs",
+			"item": [
+				{
+					"name": "Get Device Configuration",
+					"request": {
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "username",
+									"value": "admin",
+									"type": "string"
+								},
+								{
+									"key": "password",
+									"value": "admin",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:9990/dcm4chee-arc/devices/dcm4chee-arc",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "9990",
+							"path": ["dcm4chee-arc", "devices", "dcm4chee-arc"]
+						},
+						"description": "Get device configuration (requires admin auth)\n\nPort-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/radiology-dcm4chee 9990:9990"
+					},
+					"response": []
+				},
+				{
+					"name": "List AE Titles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/aets",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "aets"]
+						},
+						"description": "List all Application Entity (AE) titles configured"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Storage Systems",
+					"request": {
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "username",
+									"value": "admin",
+									"type": "string"
+								},
+								{
+									"key": "password",
+									"value": "admin",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:9990/dcm4chee-arc/storage",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "9990",
+							"path": ["dcm4chee-arc", "storage"]
+						},
+						"description": "List storage systems (MinIO configuration)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Queue Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/monitor/queues",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "monitor", "queues"]
+						},
+						"description": "Monitor internal processing queues"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "05. LDAP Tests",
+			"item": [
+				{
+					"name": "LDAP Connection Test",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/dcm4chee-arc/ui2",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["dcm4chee-arc", "ui2"]
+						},
+						"description": "DCM4CHEE uses LDAP for authentication. Test by accessing the UI and checking if LDAP auth works.\n\nDefault LDAP credentials:\nDN: cn=admin,dc=dcm4che,dc=org\nPassword: admin\n\nNote: Direct LDAP testing requires ldapsearch or similar tools. This tests LDAP integration via DCM4CHEE."
+					},
+					"response": []
+				},
+				{
+					"name": "Test LDAP Port (TCP Check)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:389/",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "389",
+							"path": [""]
+						},
+						"description": "This will fail with HTTP, but confirms port is open\n\nPort-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/radiology-ldap 389:389\n\nUse ldapsearch for actual LDAP testing:\nldapsearch -x -H ldap://localhost:389 -D \"cn=admin,dc=dcm4che,dc=org\" -w admin -b \"dc=dcm4che,dc=org\""
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "06. Nginx Proxy Tests",
+			"item": [
+				{
+					"name": "Nginx - Root (Should Redirect)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8888/",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8888",
+							"path": [""]
+						},
+						"description": "Nginx proxy root - should redirect to OHIF viewer"
+					},
+					"response": []
+				},
+				{
+					"name": "Nginx - DICOM Web Proxy",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8888/dicomweb/studies",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8888",
+							"path": ["dicomweb", "studies"]
+						},
+						"description": "Test DICOM Web proxy through Nginx"
+					},
+					"response": []
+				},
+				{
+					"name": "Nginx - Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8888/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8888",
+							"path": ["health"]
+						},
+						"description": "Nginx health check endpoint"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "07. Integration Tests",
+			"item": [
+				{
+					"name": "End-to-End - OHIF Config",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/app-config.js",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "3000",
+							"path": ["app-config.js"]
+						},
+						"description": "Verify OHIF viewer configuration points to correct DICOM endpoints"
+					},
+					"response": []
+				},
+				{
+					"name": "End-to-End - Query via Nginx",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/dicom+json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "http://localhost:8888/dicomweb/studies?limit=5",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8888",
+							"path": ["dicomweb", "studies"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "5"
+								}
+							]
+						},
+						"description": "Full stack test: OHIF → Nginx → DCM4CHEE → PostgreSQL"
+					},
+					"response": []
+				},
+				{
+					"name": "Verify MinIO Storage",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:9000/minio/health/live",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "9000",
+							"path": ["minio", "health", "live"]
+						},
+						"description": "Check MinIO (DICOM storage) health\n\nPort-forward command:\nkubectl --kubeconfig=/Users/jagankumar/Office/Work/repo/Care/care_deployment/k3s/kubeconfig port-forward -n care svc/minio 9000:9000"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "StudyInstanceUID",
+			"value": "1.2.840.113619.2.1.1.1",
+			"type": "string"
+		},
+		{
+			"key": "SeriesInstanceUID",
+			"value": "1.2.840.113619.2.1.1.2",
+			"type": "string"
+		},
+		{
+			"key": "SOPInstanceUID",
+			"value": "1.2.840.113619.2.1.1.3",
+			"type": "string"
+		}
+	]
+}

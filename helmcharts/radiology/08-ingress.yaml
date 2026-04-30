@@ -1,0 +1,69 @@
+---
+# Ingress for OHIF Viewer and DICOMweb API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: radiology-ingress
+  namespace: care
+  labels:
+    app: care-radiology
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "2048m"  # 2GB for DICOM uploads
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+spec:
+  tls:
+  - hosts:
+    - radiology.care-k3s.digit.org
+    secretName: radiology-tls
+  rules:
+  - host: radiology.care-k3s.digit.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: radiology-nginx
+            port:
+              number: 80
+---
+# Ingress for DCM4CHEE Admin UI (optional, for PACS administration)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: radiology-dcm4chee-admin
+  namespace: care
+  labels:
+    app: care-radiology
+    component: dcm4chee
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: radiology-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - DCM4CHEE Admin'
+spec:
+  tls:
+  - hosts:
+    - pacs-admin.care-k3s.digit.org
+    secretName: radiology-dcm4chee-admin-tls
+  rules:
+  - host: pacs-admin.care-k3s.digit.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: radiology-dcm4chee
+            port:
+              number: 8080
