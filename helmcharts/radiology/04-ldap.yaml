@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: ldap
-        image: dcm4che/slapd-dcm4chee:2.6.8-34.1
+        image: ghcr.io/care-ecosystem/slapd-dcm4chee:sha-fc44ffa
         ports:
         - containerPort: 389
           name: ldap
