@@ -1,15 +1,16 @@
 services:
   ldap:
-    image: dcm4che/slapd-dcm4chee:2.6.8-34.1
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
+    image: ghcr.io/care-ecosystem/slapd-dcm4chee:sha-fc44ffa
     ports:
       - "3890:389"
-    volumes:
-      - ldap-data:/var/lib/openldap/openldap-data
-      - ldap-config:/etc/openldap/slapd.d
+    environment:
+      - STORAGE_URI=jclouds:s3:http://minio:9000
+      - STORAGE_BUCKET_NAME=dicom-bucket
+      - STORAGE_BUCKET_ENDPOINT=http://minio:9000
+      - STORAGE_BUCKET_PASSWORD=minioadmin
+      - STORAGE_BUCKET_USERNAME=minioadmin
+      - STORAGE_BUCKET_PATHSTYLE=true
+      - STORAGE_BUCKET_VIRTHOST=false
 
   arc:
     image: dcm4che/dcm4chee-arc-psql:5.34.1
@@ -20,9 +21,9 @@ services:
     env_file:
       - ./docker/.local.env
     environment:
-      # POSTGRES_HOST 
-      # POSTGRES_USER 
-      # POSTGRES_PASS 
+      # POSTGRES_HOST
+      # POSTGRES_USER
+      # POSTGRES_PASS
       # are fetched from env_file
       POSTGRES_DB: dicom
       WILDFLY_CHOWN: /storage
@@ -37,6 +38,8 @@ services:
 
   ohif:
     image: ohif/app:v3.9.2
+    ports:
+      - "3000:80"
     volumes:
       - ./care_radiology/docker/ohif/app-config.js:/usr/share/nginx/html/app-config.js
 
@@ -50,6 +53,30 @@ services:
       - backend
       - ohif
       - arc
+
+  orthanc:
+    image: orthancteam/orthanc:latest
+    container_name: care-orthanc
+    ports:
+      - "8042:8042" # Web UI
+      - "4242:4242" # DICOM port
+    environment:
+      ORTHANC__NAME: "CARE-ORTHANC"
+      ORTHANC__REGISTERED_USERS: |
+        {"admin": "admin"}
+      ORTHANC__DICOM_MODALITIES: |
+        {
+          "DCM4CHEE": ["DCM4CHEE", "care-arc-1", 11112]
+        }
+      ORTHANC__REMOTE_ACCESS_ALLOWED: "true"
+      ORTHANC__DICOM_AET: "ORTHANC"
+      ORTHANC__DICOM_PORT: "4242"
+      ORTHANC__LUA_SCRIPTS: '["/etc/orthanc/webhook.lua"]'
+      ORTHANC__OVERWRITE_INSTANCES: "true"
+      CARE_RADIOLOGY_WEBHOOK_SECRET: "RADOMSECRET"
+    restart: unless-stopped
+    volumes:
+      - ./care_radiology/docker/orthanc/webhook.lua:/etc/orthanc/webhook.lua
 
 volumes:
   ldap-data:

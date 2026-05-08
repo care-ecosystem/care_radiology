@@ -1,5 +1,6 @@
 {
   "Name": "Orthanc",
+  "LuaScript": "/etc/orthanc/webhook.lua",
   "StorageDirectory": "/var/lib/orthanc/db",
   "Plugins": ["/usr/share/orthanc/plugins"],
   "DefaultEncoding": "Utf8",

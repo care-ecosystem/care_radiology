@@ -276,9 +276,12 @@ def fetch_study(dicom_study: DicomStudy):
         else None
     )
 
+    study_dates = d_find(study, DICOM_TAG.StudyDate.value)
+    study_times = d_find(study, DICOM_TAG.StudyTime.value)
+
     study_date = d_datetime_to_iso(
-        d_find(study, DICOM_TAG.StudyDate.value)[0],
-        d_find(study, DICOM_TAG.StudyTime.value)[0],
+        study_dates[0] if study_dates else None,
+        study_times[0] if study_times else None,
     )
 
     cachable = {
@@ -398,7 +401,12 @@ def d_query_study(study_uid):
         },
         params={
             "StudyInstanceUID": study_uid,
-            "includefield": f"{DICOM_TAG.StudyDescription.value},{DICOM_TAG.StudyModalities.value}",
+            "includefield": ",".join([
+                DICOM_TAG.StudyDescription.value,
+                DICOM_TAG.StudyModalities.value,
+                DICOM_TAG.StudyDate.value,
+                DICOM_TAG.StudyTime.value,
+            ]),
         },
     )
 
