@@ -1,0 +1,87 @@
+---
+# Job to initialize DICOM database schema
+# Downloads SQL scripts from the care_radiology repository and applies them
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: radiology-init-db-schema
+  namespace: care
+  labels:
+    app: care-radiology
+    component: db-init
+spec:
+  ttlSecondsAfterFinished: 86400  # Keep job for 24 hours
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: init-db
+        image: postgres:16-alpine
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+
+          echo "==================================="
+          echo "DICOM Database Schema Initialization"
+          echo "==================================="
+          echo ""
+
+          export PGPASSWORD="${POSTGRES_PASSWORD}"
+
+          # Install curl
+          apk add --no-cache curl
+
+          # Download SQL scripts from public GitHub repository
+          echo "Downloading SQL initialization scripts from GitHub..."
+
+          BASE_URL="https://raw.githubusercontent.com/10bedicu/care_radiology/main/docker/dcm4che/sql-scripts"
+
+          curl -sSL -o /tmp/10_create-psql.sql "${BASE_URL}/10_create-psql.sql" || {
+            echo "ERROR: Failed to download 10_create-psql.sql"
+            exit 1
+          }
+
+          curl -sSL -o /tmp/20_create-fk-index.sql "${BASE_URL}/20_create-fk-index.sql" || {
+            echo "ERROR: Failed to download 20_create-fk-index.sql"
+            exit 1
+          }
+
+          curl -sSL -o /tmp/30_create-case-insensitive-index.sql "${BASE_URL}/30_create-case-insensitive-index.sql" || {
+            echo "ERROR: Failed to download 30_create-case-insensitive-index.sql"
+            exit 1
+          }
+
+          echo "✓ Scripts downloaded successfully"
+          echo ""
+
+          # Apply schema
+          echo "Step 1/3: Creating tables and sequences..."
+          psql -h ${POSTGRES_HOST} -U postgres -d dicom -f /tmp/10_create-psql.sql
+          echo "✓ Tables and sequences created"
+          echo ""
+
+          echo "Step 2/3: Creating foreign key indexes..."
+          psql -h ${POSTGRES_HOST} -U postgres -d dicom -f /tmp/20_create-fk-index.sql
+          echo "✓ Foreign key indexes created"
+          echo ""
+
+          echo "Step 3/3: Creating case-insensitive indexes..."
+          psql -h ${POSTGRES_HOST} -U postgres -d dicom -f /tmp/30_create-case-insensitive-index.sql
+          echo "✓ Case-insensitive indexes created"
+          echo ""
+
+          echo "==================================="
+          echo "✓ Database schema initialization complete!"
+          echo "==================================="
+
+        env:
+        - name: POSTGRES_HOST
+          value: "postgres-care-rw"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: care-secrets
+              key: POSTGRES_PASSWORD

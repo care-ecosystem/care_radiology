@@ -1,0 +1,61 @@
+---
+# Job to create DICOM bucket in existing MinIO
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: radiology-init-minio
+  namespace: care
+  labels:
+    app: care-radiology
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "Configuring MinIO client..."
+          mc alias set myminio http://minio:9000 $MINIO_USER $MINIO_PASSWORD
+
+          echo "Creating dicom-bucket bucket..."
+          mc mb myminio/dicom-bucket --ignore-existing
+
+          echo "Enabling versioning on dicom-bucket bucket..."
+          mc version enable myminio/dicom-bucket
+
+          echo "Setting lifecycle policy for dicom-bucket..."
+          cat > /tmp/lifecycle.json <<LIFECYCLE
+          {
+            "Rules": [
+              {
+                "Expiration": {
+                  "Days": 0,
+                  "ExpiredObjectDeleteMarker": true
+                },
+                "ID": "expire-deleted-markers",
+                "Status": "Enabled",
+                "NoncurrentVersionExpiration": {
+                  "NoncurrentDays": 90
+                }
+              }
+            ]
+          }
+          LIFECYCLE
+          mc ilm import myminio/dicom-bucket < /tmp/lifecycle.json || true
+
+          echo "DICOM bucket setup complete!"
+        env:
+        - name: MINIO_USER
+          valueFrom:
+            secretKeyRef:
+              name: care-secrets
+              key: BUCKET_KEY
+        - name: MINIO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: care-secrets
+              key: BUCKET_SECRET

@@ -1,0 +1,206 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radiology-nginx-config
+  namespace: care
+  labels:
+    app: care-radiology
+    component: nginx
+data:
+  nginx.conf: |
+    events {
+        worker_connections 2048;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        # Logging
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                       '$status $body_bytes_sent "$http_referer" '
+                       '"$http_user_agent" "$http_x_forwarded_for"';
+
+        access_log /var/log/nginx/access.log main;
+        error_log /var/log/nginx/error.log warn;
+
+        # Performance tuning
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 2G;  # Large DICOM uploads
+
+        # Gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types text/plain text/css text/xml text/javascript
+                   application/json application/javascript application/xml+rss
+                   application/atom+xml image/svg+xml;
+
+        # Rate limiting
+        limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+        limit_req_zone $binary_remote_addr zone=upload:10m rate=5r/s;
+
+        upstream ohif {
+            least_conn;
+            server radiology-ohif:80 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream arc {
+            least_conn;
+            server radiology-dcm4chee:8080 max_fails=3 fail_timeout=30s;
+        }
+
+        server {
+            listen 80;
+            server_name radiology.care-k3s.digit.org;
+
+            # Security headers
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+            # OHIF Viewer
+            location / {
+                limit_req zone=api burst=20 nodelay;
+
+                proxy_pass http://ohif;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_buffering off;
+            }
+
+            # DICOMweb endpoints (requires authentication)
+            location /dicomweb/ {
+                limit_req zone=upload burst=10 nodelay;
+
+                # CORS preflight
+                if ($request_method = OPTIONS) {
+                    add_header 'Access-Control-Allow-Origin' 'https://radiology.care.example.com' always;
+                    add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+                    add_header 'Access-Control-Allow-Headers' '*' always;
+                    add_header 'Access-Control-Allow-Credentials' 'true' always;
+                    add_header 'Access-Control-Max-Age' '3600' always;
+                    return 204;
+                }
+
+                # Authentication check (calls Care backend in same namespace)
+                auth_request /authenticate;
+
+                # Clear authorization headers before proxying to DCM4CHEE
+                proxy_set_header authorization "";
+                proxy_set_header Authorization "";
+
+                # Proxy to DCM4CHEE
+                proxy_pass http://arc/dcm4chee-arc/aets/DCM4CHEE_PROD/rs/;
+                proxy_set_header HOST $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header Accept application/json;
+
+                # Timeout settings for large uploads
+                proxy_connect_timeout 600s;
+                proxy_send_timeout 600s;
+                proxy_read_timeout 600s;
+                send_timeout 600s;
+            }
+
+            # Authentication endpoint (internal) - calls Care backend
+            location = /authenticate {
+                internal;
+                proxy_pass http://care-backend:9000/api/care_radiology/v1/dicom/authenticate/;
+                proxy_set_header HOST $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header Accept application/json;
+                proxy_pass_request_body off;
+                proxy_set_header Content-Length "";
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radiology-nginx
+  namespace: care
+  labels:
+    app: care-radiology
+    component: nginx
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: care-radiology
+      component: nginx
+  template:
+    metadata:
+      labels:
+        app: care-radiology
+        component: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: radiology-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: radiology-nginx
+  namespace: care
+  labels:
+    app: care-radiology
+    component: nginx
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: care-radiology
+    component: nginx

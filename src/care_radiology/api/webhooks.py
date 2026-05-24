@@ -16,9 +16,8 @@ from care.emr.models.service_request import ServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
-from care_radiology.settings import plugin_settings
 
-STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
+STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
 
 
 class StaticAPIKeyAuthentication(BaseAuthentication):
@@ -37,7 +36,7 @@ class WebhookViewSet(ViewSet):
         permission_classes=[AllowAny],
     )
     def save_webhook(self, request):
-        # Authenticating webhooks with Key from plug_config
+        # Manually authenticate
         authenticator = StaticAPIKeyAuthentication()
         user_auth_tuple = authenticator.authenticate(request)
         if user_auth_tuple is None:
@@ -58,13 +57,14 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+
         if data.get("service_request_id") and data.get("study_id"):
             try:
                 sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
             except ServiceRequest.DoesNotExist:
                 return Response(
                     {"detail": "No matching service request"},
-                    status=status.HTTP_200_OK,
+                    status=status.HTTP_409_CONFLICT,
                 )
             (study, ds_created) = DicomStudy.objects.get_or_create(
                 dicom_study_uid=data.get("study_id"), patient=sr.patient, defaults={}
@@ -84,6 +84,29 @@ class WebhookViewSet(ViewSet):
                 },
                 status=status.HTTP_200_OK,
             )
+        elif data.get("patient_id") and data.get("study_id"):
+            patient = Patient.objects.filter(
+                instance_identifiers__contains=[{"value": data.get("patient_id")}]
+            ).first()
+            if not patient:
+                return Response(
+                    {"detail": "No matching patient"},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            (study, ds_created) = DicomStudy.objects.get_or_create(
+                dicom_study_uid=data.get("study_id"), patient = patient, defaults={}
+            )
+            if (patient and study):
+                return Response(
+                    {
+                        "detail": "Webhook received and saved successfully",
+                        "record": {
+                            "external_id": study.external_id,
+                            "data": data,
+                        },
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
         return Response(
             {

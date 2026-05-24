@@ -10,7 +10,6 @@ class DicomStudy(EMRBaseModel):
     dicom_study_uid = models.CharField(max_length=500)
 
     class Meta:
-        db_table = "radiology_dicomstudy"
         constraints = [
             models.UniqueConstraint(
                 fields=["patient", "dicom_study_uid"], name="unique_patient_study_uid"
