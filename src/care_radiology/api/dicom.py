@@ -208,8 +208,6 @@ class DicomViewSet(ViewSet):
         detail=False,
         methods=["get"],
         url_path="service-requests",
-        authentication_classes=[],
-        permission_classes=[AllowAny],
     )
     def get_servicerequests(self, request):
         service_request_external_id = request.query_params.get("serviceRequestId")
@@ -245,6 +243,11 @@ class DicomViewSet(ViewSet):
 
 
 def fetch_study(dicom_study: DicomStudy):
+
+    def first(dcm, tag):
+        values = d_find(dcm, tag)
+        return values[0] if values else None
+
     study_uid = dicom_study.dicom_study_uid
     key = f"radiology:dicom:study:{study_uid}"
     cached = cache.get(key)
@@ -276,13 +279,16 @@ def fetch_study(dicom_study: DicomStudy):
         else None
     )
 
-    study_dates = d_find(study, DICOM_TAG.StudyDate.value)
-    study_times = d_find(study, DICOM_TAG.StudyTime.value)
+    study_date_raw = first(study, DICOM_TAG.StudyDate.value)
+    study_time_raw = first(study, DICOM_TAG.StudyTime.value)
 
-    study_date = d_datetime_to_iso(
-        study_dates[0] if study_dates else None,
-        study_times[0] if study_times else None,
-    )
+    if study_date_raw and study_time_raw:
+        study_date = d_datetime_to_iso(study_date_raw, study_time_raw)
+    elif study_date_raw:
+        study_date = d_datetime_to_iso(study_date_raw)
+    else:
+        study_date = None
+
 
     cachable = {
         "study_uid": study_uid,
@@ -327,7 +333,8 @@ def get_service_requests(
         results.append(
             {
                 "service_request": {
-                    "id": sr.external_id,
+                    "id": sr.id,
+                    "external_id": sr.external_id,
                     "name": sr.activity_definition.title,
                     "date": sr.created_date
                 },
@@ -336,6 +343,8 @@ def get_service_requests(
                     "name": sr.facility.name
                 },
                 "patient": {
+                    "id": sr.patient.id,
+                    "external_id": sr.patient.external_id,
                     "name": sr.patient.name,
                     "address": sr.patient.address,
                     "phone_number": sr.patient.phone_number,
