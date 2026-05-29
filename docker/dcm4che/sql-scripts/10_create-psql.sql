@@ -288,3 +288,8 @@ alter table if exists ups_req add constraint FK1b5veu90oftv8o95nxx2xndpb foreign
 alter table if exists ups_req add constraint FKh1sjrdq663dnk8j7hsthun4ie foreign key (ups_fk) references ups;
 alter table if exists verify_observer add constraint FK8vo3f94xgum0qajsjqnlnqjo4 foreign key (observer_name_fk) references person_name;
 alter table if exists verify_observer add constraint FKkpcwkrsipamdg81mao7nkmdc2 foreign key (instance_fk) references instance;
+
+-- ADDED care_processed_status column to study table
+create type care_processed_status_enum as enum ('success', 'fail', 'pending');
+alter table if exists study add column care_processed_status care_processed_status_enum not null default 'pending';
+create index IDXr7ky5aus5ek7chmquesk2q5zx on study (care_processed_status);
