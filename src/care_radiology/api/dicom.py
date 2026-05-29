@@ -410,7 +410,12 @@ def d_query_study(study_uid):
         },
         params={
             "StudyInstanceUID": study_uid,
-            "includefield": f"{DICOM_TAG.StudyDescription.value},{DICOM_TAG.StudyModalities.value}",
+            "includefield": ",".join([
+                DICOM_TAG.StudyDescription.value,
+                DICOM_TAG.StudyModalities.value,
+                DICOM_TAG.StudyDate.value,
+                DICOM_TAG.StudyTime.value,
+            ]),
         },
     )
 
