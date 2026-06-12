@@ -20,8 +20,9 @@ class RadiologyServiceRequest(EMRBaseModel):
     raw_data = models.JSONField()
 
     class Meta:
-        db_table = "radiology_servicerequest"
-        models.UniqueConstraint(
-            fields=["service_request", "dicom_study"],
-            name="unique_service_request_dicom_study",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["service_request", "dicom_study"],
+                name="unique_service_request_dicom_study",
+            )
+        ]
