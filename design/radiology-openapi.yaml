@@ -634,7 +634,8 @@ paths:
       summary: Get DICOM studies for a service request
       description: |
         Returns all DICOM studies linked to a given service request (via
-        `RadiologyServiceRequest` join), including live DCM4CHEE metadata.
+        `RadiologyServiceRequest` join), including live DCM4CHEE metadata and
+        the full service request detail.
 
         Requires `can_write_service_request` permission on the service request.
       operationId: dicomGetServiceRequests
@@ -648,13 +649,13 @@ paths:
             format: uuid
       responses:
         '200':
-          description: List of DICOM studies linked to the service request
+          description: List of service request + DICOM study pairs
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/DicomStudyDetail'
+                  $ref: '#/components/schemas/ServiceRequestStudyEntry'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1353,6 +1354,106 @@ components:
         has_report:
           type: boolean
           description: Whether a StudyReport exists in CARE for this study
+
+    ServiceRequestDetail:
+      type: object
+      description: |
+        Full service request as returned by `ServiceRequestRetrieveSpec`.
+        Mirrors the CARE EMR service request resource.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ServiceRequest external_id
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, on_hold, entered_in_error, ended, completed, revoked]
+        intent:
+          type: string
+          enum: [proposal, plan, directive, order]
+        priority:
+          type: string
+          enum: [routine, urgent, asap, stat]
+        category:
+          type: string
+        do_not_perform:
+          type: boolean
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        code:
+          type: object
+          description: ValueSet-bound coding for the procedure code
+        body_site:
+          type: object
+          nullable: true
+        occurance:
+          type: string
+          format: date-time
+          nullable: true
+        patient_instruction:
+          type: string
+          nullable: true
+        created_date:
+          type: string
+          format: date-time
+        modified_date:
+          type: string
+          format: date-time
+        encounter:
+          type: object
+          description: Nested encounter with embedded patient
+        tags:
+          type: array
+          items:
+            type: object
+        requester:
+          type: object
+          nullable: true
+          description: Nested user object
+        locations:
+          type: array
+          items:
+            type: object
+        healthcare_service:
+          type: object
+          nullable: true
+        activity_definition:
+          type: object
+          nullable: true
+        specimens:
+          type: array
+          nullable: true
+          items:
+            type: object
+        diagnostic_reports:
+          type: array
+          nullable: true
+          items:
+            type: object
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/LiteUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/LiteUser'
+          nullable: true
+
+    ServiceRequestStudyEntry:
+      type: object
+      description: A single entry returned by the service-requests DICOM endpoint — pairs the full service request with its linked DICOM study metadata.
+      properties:
+        service_request:
+          $ref: '#/components/schemas/ServiceRequestDetail'
+        dicom_study:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyDetail'
+          nullable: true
+          description: Live DCM4CHEE study metadata; null if the study is not found in DCM4CHEE
 
     WorklistEntry:
       type: object
