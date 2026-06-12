@@ -21,6 +21,7 @@ from rest_framework.viewsets import ViewSet
 
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
+from care.emr.resources.encounter.spec import EncounterRetrieveSpec
 from care.emr.resources.service_request.spec import ServiceRequestReadSpec
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
@@ -236,8 +237,11 @@ class DicomViewSet(ViewSet):
 
             for future in as_completed(future_to_study):
                 r = future_to_study[future]
+                service_request = ServiceRequestReadSpec.serialize(r.service_request).to_json()
+                service_request["encounter"] = EncounterRetrieveSpec.serialize(r.service_request.encounter).to_json()
+
                 results.append({
-                    "service_request": ServiceRequestReadSpec.serialize(r.service_request).to_json(),
+                    "service_request": service_request,
                     "dicom_study": future.result(),
                 })
 

@@ -1355,11 +1355,275 @@ components:
           type: boolean
           description: Whether a StudyReport exists in CARE for this study
 
+    EncounterDetail:
+      type: object
+      description: |
+        Encounter as returned by `EncounterRetrieveSpec`. Includes full patient,
+        facility, care team, organizations, location history, and audit users.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Encounter external_id
+        status:
+          type: string
+          enum: [planned, in_progress, on_hold, discharged, completed, cancelled, discontinued, entered_in_error, unknown]
+        encounter_class:
+          type: string
+        period:
+          type: object
+          nullable: true
+          description: Start/end period of the encounter
+          properties:
+            start:
+              type: string
+              format: date-time
+              nullable: true
+            end:
+              type: string
+              format: date-time
+              nullable: true
+        hospitalization:
+          type: object
+          nullable: true
+        priority:
+          type: string
+        external_identifier:
+          type: string
+          nullable: true
+        discharge_summary_advice:
+          type: string
+          nullable: true
+        patient:
+          type: object
+          description: Nested patient (PatientRetrieveSpec)
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            gender:
+              type: string
+              nullable: true
+            age:
+              type: integer
+              nullable: true
+            phone_number:
+              type: string
+              nullable: true
+            address:
+              type: string
+              nullable: true
+        facility:
+          type: object
+          description: Nested facility (FacilityBareMinimumSpec)
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        status_history:
+          type: object
+          description: History of status transitions
+          properties:
+            history:
+              type: array
+              items:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  moved_at:
+                    type: string
+                    format: date-time
+        encounter_class_history:
+          type: object
+          description: History of encounter class transitions
+          properties:
+            history:
+              type: array
+              items:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  moved_at:
+                    type: string
+                    format: date-time
+        created_date:
+          type: string
+          format: date-time
+        modified_date:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: object
+        current_location:
+          nullable: true
+          description: Current facility location (FacilityLocationMinimalListSpec)
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            status:
+              type: string
+            operational_status:
+              type: string
+            form:
+              type: string
+            mode:
+              type: string
+            has_children:
+              type: boolean
+            system_availability_status:
+              type: string
+            parent:
+              type: object
+              nullable: true
+        care_team:
+          type: array
+          description: List of care team members (user + role)
+          items:
+            type: object
+            properties:
+              member:
+                $ref: '#/components/schemas/LiteUser'
+              role:
+                type: object
+                description: ValueSet-bound practitioner role coding
+        appointment:
+          nullable: true
+          description: Linked appointment booking (TokenBookingReadSpec)
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            token_slot:
+              type: object
+            booked_on:
+              type: string
+              format: date-time
+            booked_by:
+              $ref: '#/components/schemas/LiteUser'
+            status:
+              type: string
+            note:
+              type: string
+            resource_type:
+              type: string
+            resource:
+              type: object
+            facility:
+              type: object
+            created_date:
+              type: string
+              format: date-time
+            modified_date:
+              type: string
+              format: date-time
+        organizations:
+          type: array
+          description: Facility organizations linked to this encounter (FacilityOrganizationReadSpec)
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              description:
+                type: string
+              active:
+                type: boolean
+              org_type:
+                type: string
+              parent:
+                type: object
+                nullable: true
+              metadata:
+                type: object
+              system_generated:
+                type: boolean
+              level_cache:
+                type: integer
+              has_children:
+                type: boolean
+              created_by:
+                allOf:
+                  - $ref: '#/components/schemas/LiteUser'
+                nullable: true
+              updated_by:
+                allOf:
+                  - $ref: '#/components/schemas/LiteUser'
+                nullable: true
+        location_history:
+          type: array
+          description: Ordered list of location assignments (FacilityLocationEncounterListSpecWithLocation), newest first
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              start_datetime:
+                type: string
+                format: date-time
+              end_datetime:
+                type: string
+                format: date-time
+                nullable: true
+              status:
+                type: string
+              location:
+                type: object
+                description: FacilityLocationListSpec
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  status:
+                    type: string
+                  operational_status:
+                    type: string
+                  form:
+                    type: string
+                  mode:
+                    type: string
+                  has_children:
+                    type: boolean
+                  system_availability_status:
+                    type: string
+                  parent:
+                    type: object
+                    nullable: true
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/LiteUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/LiteUser'
+          nullable: true
+        extensions:
+          type: object
+          nullable: true
+
     ServiceRequestDetail:
       type: object
       description: |
-        Full service request as returned by `ServiceRequestRetrieveSpec`.
-        Mirrors the CARE EMR service request resource.
+        Service request as returned by `ServiceRequestReadSpec`.
+        The `encounter` field is serialized via `EncounterRetrieveSpec`.
       properties:
         id:
           type: string
@@ -1404,8 +1668,7 @@ components:
           type: string
           format: date-time
         encounter:
-          type: object
-          description: Nested encounter with embedded patient
+          $ref: '#/components/schemas/EncounterDetail'
         tags:
           type: array
           items:
@@ -1413,35 +1676,7 @@ components:
         requester:
           type: object
           nullable: true
-          description: Nested user object
-        locations:
-          type: array
-          items:
-            type: object
-        healthcare_service:
-          type: object
-          nullable: true
-        activity_definition:
-          type: object
-          nullable: true
-        specimens:
-          type: array
-          nullable: true
-          items:
-            type: object
-        diagnostic_reports:
-          type: array
-          nullable: true
-          items:
-            type: object
-        created_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-        updated_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
+          description: Nested user object (UserSpec)
 
     ServiceRequestStudyEntry:
       type: object
