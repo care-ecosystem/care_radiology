@@ -700,14 +700,14 @@ paths:
     post:
       tags:
         - Study Reports
-      summary: Create or update study report
+      summary: Create study report
       description: |
-        Creates a study report for a DICOM study. If a report already exists for the
-        given study, it is **updated** (upsert behaviour) and an audit record is written
-        for every changed field. An audit record is also written on initial creation.
+        Creates a new study report for a DICOM study. A study can have multiple reports.
+        An audit record (`action: "Created"`) is written on creation with `created_by`
+        and `updated_by` set to the requesting user.
 
         Requires `can_write_radiology_report` permission.
-      operationId: createOrUpdateStudyReport
+      operationId: createStudyReport
       requestBody:
         required: true
         content:
@@ -724,7 +724,7 @@ paths:
               impression: "Normal chest radiograph."
       responses:
         '201':
-          description: Study report created (or updated if one already existed for this study)
+          description: Study report created
           content:
             application/json:
               schema:
@@ -747,6 +747,69 @@ paths:
       responses:
         '200':
           description: Study report detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudyReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags:
+        - Study Reports
+      summary: Update study report
+      description: |
+        Partially updates an existing study report identified by its `external_id`.
+        Only fields included in the request body are changed; omitted fields retain
+        their current values.
+
+        An audit record (`action: "Updated"`) is written only if at least one field
+        actually changed, recording `old_value` and `new_value` keyed by field name.
+        `created_by` and `updated_by` on the audit record are set to the requesting user.
+
+        Requires `can_write_radiology_report` permission.
+      operationId: updateStudyReport
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudyReportUpdate'
+            example:
+              findings: "Small pleural effusion on the right."
+              impression: "Pleural effusion, right side."
+      responses:
+        '200':
+          description: Study report updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudyReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags:
+        - Study Reports
+      summary: Delete study report (soft-delete)
+      operationId: deleteStudyReport
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Study report deleted
           content:
             application/json:
               schema:
@@ -1781,6 +1844,35 @@ components:
           nullable: true
           description: Radiologist impression / conclusion
           example: "Normal chest radiograph."
+
+    StudyReportUpdate:
+      type: object
+      description: All fields optional; only supplied fields are updated.
+      properties:
+        modality:
+          type: string
+          format: uuid
+          description: ModalityType external_id
+        body_part:
+          type: string
+          format: uuid
+          description: BodyPart external_id
+        scan_protocol:
+          type: string
+          format: uuid
+          description: ScanProtocol external_id
+        technique:
+          type: string
+          nullable: true
+          example: "Axial sections with 5mm slice thickness"
+        findings:
+          type: string
+          nullable: true
+          example: "Small pleural effusion on the right."
+        impression:
+          type: string
+          nullable: true
+          example: "Pleural effusion, right side."
 
     StudyReport:
       type: object
