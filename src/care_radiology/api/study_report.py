@@ -7,6 +7,7 @@ from care_radiology.models.study_report import StudyReport
 from care_radiology.resources.study_report.spec import (
     StudyReportCreateSpec,
     StudyReportListSpec,
+    StudyReportUpdateSpec,
 )
 from care.security.authorization import AuthorizationController
 
@@ -17,7 +18,7 @@ class StudyReportViewSet(EMRModelViewSet):
     database_model = StudyReport
     pydantic_model = StudyReportCreateSpec
     pydantic_read_model = StudyReportListSpec
-    pydantic_update_model = None
+    pydantic_update_model = StudyReportUpdateSpec
     pydantic_retrieve_model = StudyReportListSpec
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]
@@ -62,13 +63,38 @@ class StudyReportViewSet(EMRModelViewSet):
     def perform_create(self, instance):
         from care_radiology.models.study_report_audit import StudyReportAudit
 
-        user = self.request.user
-
-        StudyReportAudit.objects.filter(
-            study_report=instance,
-            created_by__isnull=True,
-        ).update(
-            created_by=user,
-            updated_by=user,
-        )
         super().perform_create(instance)
+
+        StudyReportAudit.objects.create(
+            study_report=instance,
+            action="Created",
+            field_name="All",
+            old_value=None,
+            new_value={
+                "Modality": str(instance.modality),
+                "Body Part": str(instance.body_part),
+                "Scan Protocol": str(instance.scan_protocol),
+                "Technique": instance.technique,
+                "Findings": instance.findings,
+                "Impression": instance.impression,
+            },
+            created_by=self.request.user,
+            updated_by=self.request.user,
+        )
+
+    def perform_update(self, instance):
+        from care_radiology.models.study_report_audit import StudyReportAudit
+
+        super().perform_update(instance)
+
+        old_values, new_values = getattr(instance, "_audit_diff", ({}, {}))
+        if old_values:
+            StudyReportAudit.objects.create(
+                study_report=instance,
+                action="Updated",
+                field_name="Multiple",
+                old_value=old_values,
+                new_value=new_values,
+                created_by=self.request.user,
+                updated_by=self.request.user,
+            )

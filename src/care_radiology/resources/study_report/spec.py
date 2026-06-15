@@ -4,7 +4,6 @@ from uuid import UUID
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from care_radiology.models.study_report import StudyReport
-from care_radiology.models.study_report_audit import StudyReportAudit
 from care_radiology.models.modality_type import ModalityType
 from care_radiology.models.body_part import BodyPart
 from care_radiology.models.scan_protocol import ScanProtocol
@@ -24,7 +23,6 @@ class StudyReportCreateSpec(BaseModel):
     impression: Optional[str] = None
 
     def de_serialize(self) -> StudyReport:
-        """Convert to StudyReport instance (resolve FKs)."""
         study = DicomStudy.objects.filter(external_id=self.study).first()
         modality = ModalityType.objects.filter(external_id=self.modality).first()
         body_part = BodyPart.objects.filter(external_id=self.body_part).first()
@@ -33,47 +31,7 @@ class StudyReportCreateSpec(BaseModel):
         if not all([study, modality, body_part, scan_protocol]):
             raise ValidationError("Invalid study/modality/body_part/scan_protocol IDs")
 
-        # Check if StudyReport already exists for this study
-        existing_report = StudyReport.objects.filter(study=study).first()
-
-        if existing_report:
-            old_values = {}
-            new_values = {}
-
-            def track(field, old, new):
-                if old != new:
-                    old_values[field] = str(old) if old is not None else None
-                    new_values[field] = str(new) if new is not None else None
-
-            track("Modality", existing_report.modality, modality)
-            track("Body Part", existing_report.body_part, body_part)
-            track("Scan Protocol", existing_report.scan_protocol, scan_protocol)
-            track("Technique", existing_report.technique, self.technique)
-            track("Findings", existing_report.findings, self.findings)
-            track("Impression", existing_report.impression, self.impression)
-
-            # Only log audit if something changed
-            if old_values:
-                StudyReportAudit.objects.create(
-                    study_report=existing_report,
-                    action="Updated",
-                    field_name="Multiple",
-                    old_value=old_values,
-                    new_value=new_values,
-                )
-                # Update existing fields
-                existing_report.modality = modality
-                existing_report.body_part = body_part
-                existing_report.scan_protocol = scan_protocol
-                existing_report.technique = self.technique
-                existing_report.findings = self.findings
-                existing_report.impression = self.impression
-                existing_report.last_modified_datetime = timezone.now()
-                existing_report.save()
-            return existing_report
-
-        # ---------------- CREATE FLOW ----------------
-        report = StudyReport.objects.create(
+        return StudyReport(
             study=study,
             modality=modality,
             body_part=body_part,
@@ -83,22 +41,52 @@ class StudyReportCreateSpec(BaseModel):
             impression=self.impression,
         )
 
-        StudyReportAudit.objects.create(
-            study_report=report,
-            action="Created",
-            field_name="All",
-            old_value=None,
-            new_value={
-                "Modality": str(modality),
-                "Body Part": str(body_part),
-                "Scan Protocol": str(scan_protocol),
-                "Technique": self.technique,
-                "Findings": self.findings,
-                "Impression": self.impression,
-            },
-        )
 
-        return report
+class StudyReportUpdateSpec(BaseModel):
+    modality: Optional[UUID] = None
+    body_part: Optional[UUID] = None
+    scan_protocol: Optional[UUID] = None
+    technique: Optional[str] = None
+    findings: Optional[str] = None
+    impression: Optional[str] = None
+
+    def de_serialize(self, obj: StudyReport, partial: bool = False) -> StudyReport:
+        modality = ModalityType.objects.filter(external_id=self.modality).first() if self.modality else obj.modality
+        body_part = BodyPart.objects.filter(external_id=self.body_part).first() if self.body_part else obj.body_part
+        scan_protocol = ScanProtocol.objects.filter(external_id=self.scan_protocol).first() if self.scan_protocol else obj.scan_protocol
+
+        old_values = {}
+        new_values = {}
+
+        def track(field, old, new):
+            if old != new:
+                old_values[field] = str(old) if old is not None else None
+                new_values[field] = str(new) if new is not None else None
+
+        track("Modality", obj.modality, modality)
+        track("Body Part", obj.body_part, body_part)
+        track("Scan Protocol", obj.scan_protocol, scan_protocol)
+
+        technique = self.technique if (self.technique is not None or not partial) else obj.technique
+        findings = self.findings if (self.findings is not None or not partial) else obj.findings
+        impression = self.impression if (self.impression is not None or not partial) else obj.impression
+
+        track("Technique", obj.technique, technique)
+        track("Findings", obj.findings, findings)
+        track("Impression", obj.impression, impression)
+
+        obj.modality = modality
+        obj.body_part = body_part
+        obj.scan_protocol = scan_protocol
+        obj.technique = technique
+        obj.findings = findings
+        obj.impression = impression
+        obj.last_modified_datetime = timezone.now()
+
+        # Store diff for the viewset to write the audit record with the correct user
+        obj._audit_diff = (old_values, new_values)  # noqa: SLF001
+
+        return obj
 
 def _serialize_lite_user(user):
     if not user:
