@@ -31,19 +31,17 @@ from care_radiology.models.study_report import StudyReport
 DCM4CHEE_BASEURL = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL']
 STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
 
-class StaticAPIKeyAuthentication(BaseAuthentication, BasePermission):
+class StaticAPIKeyAuthentication(BaseAuthentication):
     def authenticate(self, request):
         api_key = request.headers.get("Authorization")
         if api_key == STATIC_API_KEY:
             return (AnonymousUser(), None)
         raise AuthenticationFailed("Invalid API key")
 
-    def has_permission(self, request):
+class StaticAPIKeyAuthorization(BasePermission):
+    def has_permission(self, request, view):
         api_key = request.headers.get("Authorization")
-        if api_key == STATIC_API_KEY:
-            return (AnonymousUser(), None)
-        raise AuthenticationFailed("Invalid API key")
-
+        return api_key == STATIC_API_KEY
 
 
 class DICOM_TAG(Enum):
@@ -161,6 +159,85 @@ class DicomViewSet(ViewSet):
                 return Response(
                     data={
                         "message": "DICOM file uploaded to Orthanc successfully",
+                        "study_uid": study_uid,
+                        "study": fetch_study(dicom_study),
+                    },
+                    status=201,
+                )
+
+            else:
+                return Response(
+                    data={
+                        "error": "Failed to upload to DCM4CHE",
+                        "status_code": upload_response.status_code,
+                    },
+                    status=502,
+                )
+
+        except Exception as e:
+            return Response(
+                data={"error": "Exception occurred", "details": str(e)}, status=500
+            )
+
+    # DCM Files upload via static API key (no user auth required)
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="upload-dicom-external",
+        authentication_classes=[StaticAPIKeyAuthentication],
+        permission_classes=[StaticAPIKeyAuthorization],
+    )
+    def upload_with_key(self, request):
+        patient = Patient.objects.get(external_id=request.data.get("patient_id"))
+        dcm_file = request.FILES.get("file")
+
+        if not dcm_file:
+            return Response({"error": "No file provided"}, status=400)
+
+        try:
+            body, content_type = encode_file_multipart_related(dcm_file)
+            upload_response = requests.post(
+                url=f"{DCM4CHEE_BASEURL}/rs/studies",
+                data=body,
+                headers={
+                    "Content-Type": content_type,
+                    "Accept": "application/dicom+json",
+                },
+            )
+
+            if upload_response.status_code in [200, 201]:
+                refenrenced_sop = d_find(
+                    upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value
+                )[0]
+
+                instance_uid = d_find(
+                    refenrenced_sop, DICOM_TAG.ReferencedInstanceUID.value
+                )[0]
+
+                study_uid = d_find(
+                    d_query_instance(instance_uid), DICOM_TAG.StudyInstanceUID.value
+                )[0]
+
+                studies_qs = DicomStudy.objects.annotate(
+                    has_report=Exists(
+                        StudyReport.objects.filter(study=OuterRef("pk"))
+                    )
+                )
+
+                (dicom_study, _) = DicomStudy.objects.update_or_create(
+                    dicom_study_uid=study_uid,
+                    patient=patient,
+                    defaults={},
+                )
+
+                dicom_study = studies_qs.get(pk=dicom_study.pk)
+
+                key = f"radiology:dicom:study:{study_uid}"
+                cache.delete(key)
+
+                return Response(
+                    data={
+                        "message": "DICOM file uploaded to DCM4CHE successfully",
                         "study_uid": study_uid,
                         "study": fetch_study(dicom_study),
                     },
