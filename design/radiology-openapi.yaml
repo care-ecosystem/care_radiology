@@ -520,6 +520,79 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /api/care_radiology/dicom/upload-dicom-external/:
+    post:
+      tags:
+        - DICOM Studies
+      summary: Upload DICOM file (external / static API key)
+      description: |
+        Upload a DICOM (.dcm) file for a patient using a static API key instead of
+        user JWT auth. Intended for machine-to-machine use (e.g. modality worklist
+        server, HIS integration). The file is forwarded to DCM4CHEE and a `DicomStudy`
+        record is created or updated in CARE.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
+      operationId: dicomUploadExternal
+      security:
+        - StaticApiKey: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - patient_id
+                - file
+              properties:
+                patient_id:
+                  type: string
+                  format: uuid
+                  description: Patient external_id
+                file:
+                  type: string
+                  format: binary
+                  description: DICOM (.dcm) file
+      responses:
+        '201':
+          description: DICOM file uploaded and study record created/updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "DICOM file uploaded to DCM4CHE successfully"
+                  study_uid:
+                    type: string
+                    description: DICOM Study Instance UID
+                    example: "1.2.840.10008.5.1.4.1.1.2.1234"
+                  study:
+                    $ref: '#/components/schemas/DicomStudyDetail'
+        '400':
+          description: No file provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "No file provided"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: DCM4CHEE upload failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Failed to upload to DCM4CHE"
+                status_code: 503
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /api/care_radiology/dicom/upload/:
     post:
       tags:
