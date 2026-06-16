@@ -11,6 +11,7 @@ from django.contrib.auth.models import AnonymousUser
 
 from care.emr.models.device import Device
 from care.security.authorization.base import AuthorizationController
+from care.utils.shortcuts import get_object_or_404
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import BasePermission
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
@@ -106,7 +107,7 @@ class DicomViewSet(ViewSet):
     # DCM Files upload
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
-        patient = Patient.objects.get(external_id=request.data.get("patient_id"))
+        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         dcm_file = request.FILES.get("file")
 
         if not AuthorizationController.call("can_write_patient_obj", self.request.user, patient):
@@ -188,7 +189,7 @@ class DicomViewSet(ViewSet):
         permission_classes=[StaticAPIKeyAuthorization],
     )
     def upload_with_key(self, request):
-        patient = Patient.objects.get(external_id=request.data.get("patient_id"))
+        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         dcm_file = request.FILES.get("file")
 
         if not dcm_file:
@@ -262,8 +263,7 @@ class DicomViewSet(ViewSet):
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
         patient_external_id = request.query_params.get("patientId")
-
-        patient = Patient.objects.get(external_id=patient_external_id)
+        patient = get_object_or_404(Patient, external_id=patient_external_id)
         if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
             raise PermissionDenied(f"You do not have permission to view this patient")
 
