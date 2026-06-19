@@ -4,19 +4,15 @@ from uuid import UUID
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from care_radiology.models.study_report import StudyReport
-from care_radiology.models.modality_type import ModalityType
-from care_radiology.models.body_part import BodyPart
 from care_radiology.models.scan_protocol import ScanProtocol
 from care_radiology.models.dicom_study import DicomStudy
-from care.emr.models.patient import Patient
 from care.emr.resources.patient.spec import PatientListSpec
-
 
 
 class StudyReportCreateSpec(BaseModel):
     study: UUID
-    modality: UUID
-    body_part: UUID
+    modality: str
+    body_part: str
     scan_protocol: UUID
     technique: Optional[str] = None
     findings: Optional[str] = None
@@ -24,17 +20,21 @@ class StudyReportCreateSpec(BaseModel):
 
     def de_serialize(self) -> StudyReport:
         study = DicomStudy.objects.filter(external_id=self.study).first()
-        modality = ModalityType.objects.filter(external_id=self.modality).first()
-        body_part = BodyPart.objects.filter(external_id=self.body_part).first()
         scan_protocol = ScanProtocol.objects.filter(external_id=self.scan_protocol).first()
 
-        if not all([study, modality, body_part, scan_protocol]):
-            raise ValidationError("Invalid study/modality/body_part/scan_protocol IDs")
+        if not all([study, scan_protocol]):
+            raise ValidationError("Invalid study/scan_protocol IDs")
+
+        if not self.modality:
+            raise ValidationError("Modality is required")
+
+        if not self.body_part:
+            raise ValidationError("Body part is required")
 
         return StudyReport(
             study=study,
-            modality=modality,
-            body_part=body_part,
+            modality=self.modality,
+            body_part=self.body_part,
             scan_protocol=scan_protocol,
             technique=self.technique,
             findings=self.findings,
@@ -43,16 +43,16 @@ class StudyReportCreateSpec(BaseModel):
 
 
 class StudyReportUpdateSpec(BaseModel):
-    modality: Optional[UUID] = None
-    body_part: Optional[UUID] = None
+    modality: Optional[str] = None
+    body_part: Optional[str] = None
     scan_protocol: Optional[UUID] = None
     technique: Optional[str] = None
     findings: Optional[str] = None
     impression: Optional[str] = None
 
     def de_serialize(self, obj: StudyReport, partial: bool = False) -> StudyReport:
-        modality = ModalityType.objects.filter(external_id=self.modality).first() if self.modality else obj.modality
-        body_part = BodyPart.objects.filter(external_id=self.body_part).first() if self.body_part else obj.body_part
+        modality = self.modality if self.modality is not None else obj.modality
+        body_part = self.body_part if self.body_part is not None else obj.body_part
         scan_protocol = ScanProtocol.objects.filter(external_id=self.scan_protocol).first() if self.scan_protocol else obj.scan_protocol
 
         old_values = {}
@@ -83,10 +83,10 @@ class StudyReportUpdateSpec(BaseModel):
         obj.impression = impression
         obj.last_modified_datetime = timezone.now()
 
-        # Store diff for the viewset to write the audit record with the correct user
         obj._audit_diff = (old_values, new_values)  # noqa: SLF001
 
         return obj
+
 
 def _serialize_lite_user(user):
     if not user:
@@ -105,8 +105,6 @@ class StudyReportListSpec(BaseModel):
     study_id: UUID
     patient_id: UUID
     patient: Optional[Dict] = None
-    modality_id: UUID
-    body_part_id: UUID
     scan_protocol_id: UUID
     study: Optional[str] = None
     modality: str
@@ -127,12 +125,10 @@ class StudyReportListSpec(BaseModel):
             study_id=obj.study.external_id,
             patient_id=obj.study.patient.external_id,
             patient=PatientListSpec.serialize(obj.study.patient).to_json(),
-            modality_id=obj.modality.external_id,
-            body_part_id=obj.body_part.external_id,
             scan_protocol_id=obj.scan_protocol.external_id,
             study=getattr(obj.study, "study_name", None),
-            modality=obj.modality.display_name,
-            body_part=obj.body_part.display_name,
+            modality=obj.modality,
+            body_part=obj.body_part,
             scan_protocol=obj.scan_protocol.display_name,
             technique=obj.technique,
             findings=obj.findings,
@@ -143,11 +139,8 @@ class StudyReportListSpec(BaseModel):
             updated_by=_serialize_lite_user(obj.updated_by),
         )
 
-    # Add this for backward compatibility
     def to_json(self):
-        """Make compatible with EMRModelViewSet expecting .to_json().."""
         try:
             return self.model_dump()
         except Exception:
-            # fallback if using older Pydantic
             return self.json()

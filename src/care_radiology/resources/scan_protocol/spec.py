@@ -2,8 +2,6 @@ from pydantic import BaseModel
 from typing import List, Optional
 from uuid import UUID
 from care_radiology.models.scan_protocol import ScanProtocol
-from care_radiology.models.modality_type import ModalityType
-from care_radiology.models.body_part import BodyPart
 from rest_framework.exceptions import ValidationError
 
 
@@ -16,9 +14,7 @@ class ScanProtocolCoding(BaseModel):
 class ScanProtocolListSpec(BaseModel):
     external_id: UUID
     display_name: str
-    modality_id: UUID
     modality: str
-    body_part_id: UUID
     body_part: str
     coding: list[ScanProtocolCoding] | None = None
 
@@ -27,10 +23,8 @@ class ScanProtocolListSpec(BaseModel):
         return cls(
             external_id=obj.external_id,
             display_name=obj.display_name,
-            modality_id=obj.modality.external_id if obj.modality else None,
-            modality=obj.modality.display_name if obj.modality else None,
-            body_part_id=obj.body_part.external_id if obj.body_part else None,
-            body_part=obj.body_part.display_name if obj.body_part else None,
+            modality=obj.modality,
+            body_part=obj.body_part,
             coding=obj.coding or [],
         )
 
@@ -39,23 +33,23 @@ class ScanProtocolListSpec(BaseModel):
 
 
 class ScanProtocolCreateSpec(BaseModel):
-    modality: UUID  # external_id of ModalityType
-    body_part: UUID  # external_id of BodyPart
+    modality: str
+    body_part: str
     display_name: str
     coding: List[ScanProtocolCoding]
 
     def de_serialize(self) -> ScanProtocol:
-        """Create or revive a ScanProtocol entry."""
-        modality = ModalityType.objects.filter(external_id=self.modality).first()
-        if not modality:
-            raise ValidationError(f"Invalid modality id: {self.modality}")
+        if not self.display_name:
+            raise ValidationError("Scan Protocol is required")
 
-        body_part = BodyPart.objects.filter(external_id=self.body_part).first()
-        if not body_part:
-            raise ValidationError(f"Invalid body part id: {self.body_part}")
+        if not self.modality:
+            raise ValidationError("Modality is required")
+
+        if not self.body_part:
+            raise ValidationError("Body part is required")
 
         existing = ScanProtocol.objects.filter(
-            display_name=self.display_name, modality=modality, body_part=body_part
+            display_name=self.display_name, modality=self.modality, body_part=self.body_part
         ).first()
 
         if existing:
@@ -67,37 +61,29 @@ class ScanProtocolCreateSpec(BaseModel):
                 return existing
             raise ValidationError(
                 f"Scan protocol '{self.display_name}' already exists for "
-                f"{modality.display_name} - {body_part.display_name}."
+                f"{self.modality} - {self.body_part}."
             )
 
-        obj = ScanProtocol(
-            modality=modality,
-            body_part=body_part,
+        return ScanProtocol(
+            modality=self.modality,
+            body_part=self.body_part,
             display_name=self.display_name,
             coding=[c.model_dump() for c in self.coding],
         )
-        return obj
 
 
 class ScanProtocolUpdateSpec(BaseModel):
-    modality: Optional[UUID] = None
-    body_part: Optional[UUID] = None
+    modality: Optional[str] = None
+    body_part: Optional[str] = None
     display_name: Optional[str] = None
     coding: Optional[List[ScanProtocolCoding]] = None
 
     def de_serialize(self, obj: ScanProtocol, **kwargs) -> ScanProtocol:
-        """Update an existing ScanProtocol model instance."""
         if self.modality is not None:
-            modality = ModalityType.objects.filter(external_id=self.modality).first()
-            if not modality:
-                raise ValidationError(f"Invalid modality id: {self.modality}")
-            obj.modality = modality
+            obj.modality = self.modality
 
         if self.body_part is not None:
-            body_part = BodyPart.objects.filter(external_id=self.body_part).first()
-            if not body_part:
-                raise ValidationError(f"Invalid body part id: {self.body_part}")
-            obj.body_part = body_part
+            obj.body_part = self.body_part
 
         if self.display_name is not None:
             obj.display_name = self.display_name
