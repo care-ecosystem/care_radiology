@@ -36,7 +36,7 @@ class TemplateViewSet(EMRModelViewSet):
     def get_queryset(self):
         """Return templates belonging to the current user only."""
         qs = super().get_queryset().select_related(
-            "modality", "body_part", "scan_protocol", "user"
+            "scan_protocol", "user"
         )
         user = getattr(self.request, "user", None)
         if user and user.is_authenticated:

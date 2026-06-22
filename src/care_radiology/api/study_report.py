@@ -49,7 +49,7 @@ class StudyReportViewSet(EMRModelViewSet):
         qs = (
             super()
             .get_queryset()
-            .select_related("study", "modality", "body_part", "scan_protocol")
+            .select_related("study", "scan_protocol")
             .order_by("-created_date")
         )
 

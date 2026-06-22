@@ -24,8 +24,8 @@ class ScanProtocolViewSet(EMRModelViewSet):
     ordering_fields = ["created_date", "modified_date"]
     search_fields = [
         "display_name",
-        "modality__display_name",
-        "body_part__display_name",
+        "modality",
+        "body_part",
     ]
 
     def authorize_create(self, request_obj):
@@ -41,6 +41,5 @@ class ScanProtocolViewSet(EMRModelViewSet):
         return (
             super()
             .get_queryset()
-            .select_related("modality", "body_part")
             .order_by("-created_date")
         )
