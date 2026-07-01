@@ -167,6 +167,16 @@ class DicomViewSet(ViewSet):
                 )
 
             else:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info("Inside the else block")
+                logger.info(f"Upload Response Status: {upload_response.status_code}")
+
+                logger.error(f"Response Body: {upload_response.text}")
+                logger.error("\n")
+                
+                logger.error(f"Response JSON: {upload_response.json()}")  # if response is JSON
+
                 return Response(
                     data={
                         "error": "Failed to upload to DCM4CHE",
@@ -174,6 +184,7 @@ class DicomViewSet(ViewSet):
                     },
                     status=502,
                 )
+
 
         except Exception as e:
             return Response(
