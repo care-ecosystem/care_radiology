@@ -236,6 +236,7 @@ class WebhookViewSet(ViewSet):
                 )
 
             tag_uuid = tag_config.external_id
+            tag_id = tag_config.id
             logger.info(f"[MPPS] Tag found: {tag_uuid}")
         except Exception as e:
             logger.error(f"[MPPS] Error fetching tag: {str(e)}")
@@ -244,64 +245,49 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Step 8: Call CARE's set_tags API via HTTP with stored authentication
-        try:
-            import requests
-            from django.core.cache import cache
+        # Step 8: Update ServiceRequest tags directly via Django ORM
+        try:    
+            tags = sr.tags or []
+            logger.info(f"[MPPS] Current tags before update: {tags}")
 
-            set_tags_url = f"http://localhost:9000/api/v1/facility/{facility.external_id}/service_request/{service_request_id}/set_tags/"
-
-            payload = {"tags": [str(tag_uuid)]}
-            logger.info(f"[MPPS] Calling set_tags API: {set_tags_url}")
-            logger.info(f"[MPPS] Payload: {payload}")
-
-            # Step 8a: Get cached access token or fetch new one
-            access_token = cache.get("admin_access_token")
-
-            if not access_token:
-                logger.info(
-                    "[MPPS] Access token not in cache, fetching new one..."
+            if tag_id in tags:
+                logger.warning(
+                    f"[MPPS] Tag {tag_id} already exists in SR {service_request_id}, skipping duplicate"
                 )
-                login_url = "http://localhost:9000/api/v1/auth/login/"
-                login_payload = {"username": "admin", "password": "admin"}
+                return Response(
+                    {
+                        "detail": "Tag already set for this service request",
+                        "service_request_id": service_request_id,
+                        "mpps_status": mpps_status,
+                        "tag_id": tag_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
-                login_response = requests.post(login_url, json=login_payload)
-                login_response.raise_for_status()
+            tags.append(tag_id)
+            sr.tags = tags
+            sr.save(update_fields=["tags"])
 
-                access_token = login_response.json().get("access")
-                # Cache the token for 10 minutes (600 seconds)
-                cache.set("admin_access_token", access_token, 600)
-                logger.info("[MPPS] New access token obtained and cached")
-            else:
-                logger.info("[MPPS] Using cached access token")
-
-            # Step 8b: Call set_tags with the token
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            }
-
-            response = requests.post(
-                set_tags_url, json=payload, headers=headers
-            )
-            logger.info(f"[MPPS] set_tags response: {response.status_code}")
-            response.raise_for_status()
+            logger.info(f"[MPPS] Tag {tag_id} appended to ServiceRequest tags")
+            logger.info(f"[MPPS] Updated tags: {sr.tags}")
 
         except Exception as e:
-            logger.error(f"[MPPS] Error calling set_tags API: {str(e)}")
+            logger.error(f"[MPPS] Error updating tags: {str(e)}")
             return Response(
-                {"detail": f"Error calling set_tags API: {str(e)}"},
+                {"detail": f"Error updating tags: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         # Step 9: Return success
-        logger.info("[MPPS] Success! Tag updated")
+        logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
         return Response(
             {
                 "detail": "MPPS status tag updated successfully",
                 "service_request_id": service_request_id,
                 "mpps_status": mpps_status,
+                "tag_id": tag_id,
                 "tag_uuid": str(tag_uuid),
+                "current_tags": sr.tags,
             },
             status=status.HTTP_200_OK,
         )
