@@ -21,6 +21,7 @@ class ScanProtocolViewSet(EMRModelViewSet):
     pydantic_retrieve_model = ScanProtocolListSpec
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ["modality", "body_part"]
     ordering_fields = ["created_date", "modified_date"]
     search_fields = [
         "display_name",
