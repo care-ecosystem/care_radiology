@@ -26,7 +26,6 @@ from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.study_report import StudyReport
 from care_radiology.services.dicom_service import (
     DicomUploadError,
-    ServiceRequestLinkError,
     fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
@@ -143,14 +142,16 @@ class DicomViewSet(ViewSet):
         service_request_id = request.data.get("service_request_id")
         study_uid = request.data.get("study_uid")
 
+        if not service_request_id or not study_uid:
+            return Response(
+                {"detail": "service_request_id and study_uid are required"}, status=400
+            )
+
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
             raise PermissionDenied(f"You do not have permission to update this service request")
 
-        try:
-            record = link_service_request_to_study(service_request_id, study_uid)
-        except ServiceRequestLinkError as e:
-            return Response({"detail": e.message}, status=409)
+        record = link_service_request_to_study(service_request, study_uid)
 
         return Response(
             {

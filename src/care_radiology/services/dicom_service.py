@@ -101,26 +101,17 @@ def upload_dicom_file(patient, dcm_file):
         )
 
 
-class ServiceRequestLinkError(Exception):
-    def __init__(self, message):
-        super().__init__(message)
-        self.message = message
-
-
-def link_service_request_to_study(service_request_external_id, study_uid, raw_data=None):
-    try:
-        sr = ServiceRequest.objects.get(external_id=service_request_external_id)
-    except ServiceRequest.DoesNotExist:
-        raise ServiceRequestLinkError("No matching service request")
-
+def link_service_request_to_study(service_request, study_uid, raw_data=None):
     (study, _) = DicomStudy.objects.get_or_create(
-        dicom_study_uid=study_uid, patient=sr.patient, defaults={}
+        dicom_study_uid=study_uid, patient=service_request.patient, defaults={}
     )
 
-    defaults = {} if raw_data is None else {"raw_data": raw_data}
-    (rsr, _) = RadiologyServiceRequest.objects.update_or_create(
-        service_request=sr, dicom_study=study, defaults=defaults
+    (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
+        service_request=service_request, dicom_study=study, defaults={"raw_data": raw_data or {}}
     )
+    if not created and raw_data is not None:
+        rsr.raw_data = raw_data
+        rsr.save(update_fields=["raw_data"])
 
     return {
         "external_id": rsr.external_id,
@@ -131,11 +122,11 @@ def link_service_request_to_study(service_request_external_id, study_uid, raw_da
 def process_study_webhook(data):
     if data.get("service_request_id") and data.get("study_id"):
         try:
-            return link_service_request_to_study(
-                data["service_request_id"], data["study_id"], raw_data=data
-            )
-        except ServiceRequestLinkError as e:
-            raise WebhookConflictError(e.message)
+            sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
+        except ServiceRequest.DoesNotExist:
+            raise WebhookConflictError("No matching service request")
+
+        return link_service_request_to_study(sr, data["study_id"], raw_data=data)
 
     elif data.get("patient_id") and data.get("study_id"):
         from care.emr.models.patient import Patient
