@@ -135,7 +135,12 @@ def d_query_study(study_uid):
         },
         params={
             "StudyInstanceUID": study_uid,
-            "includefield": f"{DICOM_TAG.StudyDescription.value},{DICOM_TAG.StudyModalities.value}",
+            "includefield": ",".join([
+                DICOM_TAG.StudyDescription.value,
+                DICOM_TAG.StudyModalities.value,
+                DICOM_TAG.StudyDate.value,
+                DICOM_TAG.StudyTime.value,
+            ]),
         },
     )
 
@@ -205,11 +210,10 @@ def parse_date(date_str):
         # Fallback to date-only if time not provided
         return datetime.strptime(date_str, "%Y-%m-%d")
 
+
 # Multipart Related Encoder ---------------------------------------------------
 def encode_file_multipart_related(file_obj):
     import uuid
-
-    # filename = file_obj.name
 
     boundary = f"DICOMBOUNDARY-{uuid.uuid4().hex}"
     file_bytes = file_obj.read()

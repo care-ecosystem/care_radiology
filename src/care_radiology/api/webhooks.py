@@ -11,9 +11,6 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed, ParseError
 
 
-from care.emr.models.patient import Patient
-from care.emr.models.service_request import ServiceRequest
-from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.models.radiology_service_request import (
     RadiologyServiceRequest,
@@ -90,13 +87,11 @@ class WebhookViewSet(ViewSet):
                     )
                 )
 
+        if record is not None:
             return Response(
                 {
                     "detail": "Webhook received and saved successfully",
-                    "record": {
-                        "external_id": rsr.external_id,
-                        "data": rsr.raw_data,
-                    },
+                    "record": record,
                 },
                 status=status.HTTP_200_OK,
             )
