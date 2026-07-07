@@ -37,6 +37,8 @@ class CareRadiologyPluginConfig(AppConfig):
     verbose_name = _("Care radiology plugin")
 
     def ready(self):
+        import care_radiology.signals  # noqa F401
+
         PermissionController.register_permission_handler(RadiologyReportPermissions)
 
         from care.security.authorization.base import (AuthorizationHandler, AuthorizationController)
