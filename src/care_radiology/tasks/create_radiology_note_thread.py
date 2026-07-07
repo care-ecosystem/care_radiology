@@ -1,4 +1,5 @@
 from celery import shared_task
+from django.db import transaction
 from django.utils import timezone
 
 from care.emr.models.notes import NoteMessage, NoteThread
@@ -17,17 +18,18 @@ def generate_accession_number(service_request):
     facility_code = str(facility.external_id).replace("-", "")[:4].upper()
     modality_code = str(modality)[:4].upper() if modality else "0000"
 
-    incremental_identifier = (
-        ServiceRequest.objects.filter(
-            facility=facility,
-            created_date__year=year,
-            code__code=modality,
-        ).count()
-        + 1
-    )
+    with transaction.atomic():
+        incremental_identifier = (
+            ServiceRequest.objects.filter(
+                facility=facility,
+                created_date__year=year,
+                code__code=modality,
+            ).count()
+            + 1
+        )
 
     return (
-        f"ACC-{year}-{facility_code}-{modality_code}-{incremental_identifier:06d}"
+        f"ACC-{facility_code}-{modality_code}-{year}-{incremental_identifier:06d}"
     )
 
 
