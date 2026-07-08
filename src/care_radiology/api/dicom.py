@@ -263,7 +263,8 @@ def get_service_requests(
                     "id": sr.id,
                     "external_id": sr.external_id,
                     "name": sr.activity_definition.title,
-                    "date": sr.created_date
+                    "date": sr.created_date,
+                    "meta": sr.meta
                 },
                 "facility": {
                     "id": sr.facility.external_id,
