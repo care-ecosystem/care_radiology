@@ -91,3 +91,159 @@ class WebhookViewSet(ViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="status",
+        permission_classes=[AllowAny],
+    )
+    def handle_mpps(self, request):
+        """
+        Handle MPPS status updates from DICOM enabler
+        Updates ServiceRequest tags in CARE
+        """
+        logger.info("[MPPS] Webhook received!")
+        print("[MPPS] Webhook received!")  # Also print to console
+        # Step 1: Authenticate
+        authenticator = StaticAPIKeyAuthentication()
+        try:
+            authenticator.authenticate(request)
+            logger.info("[MPPS] Authentication passed")
+        except AuthenticationFailed:
+            logger.error("[MPPS] Authentication failed")
+            return Response(
+                {"detail": "Invalid API key"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Step 2: Parse webhook data
+        try:
+            data = request.data
+            logger.info(f"[MPPS] Received data: {data}")
+            print(f"[MPPS] Received data: {data}")
+        except ParseError:
+            logger.error("[MPPS] Invalid JSON payload")
+            return Response(
+                {"detail": "Invalid JSON payload"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Step 3: Extract fields
+        service_request_id = data.get("service_request_id")
+        study_status = data.get("study_status")
+        logger.info(
+            f"[MPPS] Extracted - SR: {service_request_id}, Status: {study_status}"
+        )
+
+        # Step 4: Validate required fields
+        if not service_request_id or not study_status:
+            logger.error("[MPPS] Missing required fields")
+            return Response(
+                {
+                    "detail": "Missing required fields: service_request_id, study_status"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Log the webhook
+        RadiologyWebhookLogs.objects.create(raw_data=data, type="MPPS")
+        logger.info("[MPPS] Webhook logged to database")
+
+        # Step 5: Get ServiceRequest from CARE
+        try:
+            sr = ServiceRequest.objects.get(external_id=service_request_id)
+            logger.info(f"[MPPS] ServiceRequest found: {sr.id}")
+        except ServiceRequest.DoesNotExist:
+            logger.error(
+                f"[MPPS] ServiceRequest not found: {service_request_id}"
+            )
+            return Response(
+                {"detail": f"Service request not found: {service_request_id}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        #Step 6: Get facility from ServiceRequest
+        facility = sr.facility
+        if not facility:
+            logger.error("[MPPS] Facility not found for SR")
+            return Response(
+                {"detail": "Facility not found for service request"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        logger.info(f"[MPPS] Facility found: {facility.external_id}")
+        # Step 7: Get TagConfig for MPPS status
+        from care.emr.models.tag_config import TagConfig
+
+        try:
+            tag_config = TagConfig.objects.filter(
+                facility=facility, display=study_status  # e.g., "STARTED"
+            ).first()
+
+            if not tag_config:
+                logger.error(f"[MPPS] Tag not found for status: {study_status}")
+                return Response(
+                    {
+                        "detail": f"Tag configuration not found for status: {study_status}"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            tag_uuid = tag_config.external_id
+            tag_id = tag_config.id
+            logger.info(f"[MPPS] Tag found: {tag_uuid}")
+        except Exception as e:
+            logger.error(f"[MPPS] Error fetching tag: {str(e)}")
+            return Response(
+                {"detail": f"Error fetching tag configuration: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Step 8: Update ServiceRequest tags directly via Django ORM
+        try:    
+            tags = sr.tags or []
+            logger.info(f"[MPPS] Current tags before update: {tags}")
+
+            if tag_id in tags:
+                logger.warning(
+                    f"[MPPS] Tag {tag_id} already exists in SR {service_request_id}, skipping duplicate"
+                )
+                return Response(
+                    {
+                        "detail": "Tag already set for this service request",
+                        "service_request_id": service_request_id,
+                        "study_status": study_status,
+                        "tag_id": tag_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            tags.append(tag_id)
+            sr.tags = tags
+            sr.save(update_fields=["tags"])
+
+            logger.info(f"[MPPS] Tag {tag_id} appended to ServiceRequest tags")
+            logger.info(f"[MPPS] Updated tags: {sr.tags}")
+
+        except Exception as e:
+            logger.error(f"[MPPS] Error updating tags: {str(e)}")
+            return Response(
+                {"detail": f"Error updating tags: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Step 9: Return success
+        logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
+        return Response(
+            {
+                "detail": "MPPS status tag updated successfully",
+                "service_request_id": service_request_id,
+                "study_status": study_status,
+                "tag_id": tag_id,
+                "tag_uuid": str(tag_uuid),
+                "current_tags": sr.tags,
+            },
+            status=status.HTTP_200_OK,
+        )
