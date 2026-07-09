@@ -102,7 +102,67 @@ class DicomViewSet(ViewSet):
                 },
                 status=201,
             )
-        except DicomUploadError as e:
+            if upload_response.status_code in [200, 201]:
+                refenrenced_sop = d_find(
+                    upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value
+                )[0]
+
+                instance_uid = d_find(
+                    refenrenced_sop, DICOM_TAG.ReferencedInstanceUID.value
+                )[0]
+
+                study_uid = d_find(
+                    d_query_instance(instance_uid), DICOM_TAG.StudyInstanceUID.value
+                )[0]
+
+                studies_qs = DicomStudy.objects.annotate(
+                    has_report=Exists(
+                        StudyReport.objects.filter(study=OuterRef('pk'))
+                    )
+                )
+
+                (dicom_study, is_created) = DicomStudy.objects.update_or_create(
+                    dicom_study_uid=study_uid,
+                    patient=patient,
+                    defaults={},
+                )
+
+                dicom_study = studies_qs.get(pk=dicom_study.pk)
+
+                # Bust the study from cache
+                key = f"radiology:dicom:study:{study_uid}"
+                cache.delete(key)
+
+                return Response(
+                    data={
+                        "message": "DICOM file uploaded to Orthanc successfully",
+                        "study_uid": study_uid,
+                        "study": fetch_study(dicom_study),
+                    },
+                    status=201,
+                )
+
+            else:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info("Inside the else block")
+                logger.info(f"Upload Response Status: {upload_response.status_code}")
+
+                logger.error(f"Response Body: {upload_response.text}")
+                logger.error("\n")
+                
+                logger.error(f"Response JSON: {upload_response.json()}")  # if response is JSON
+
+                return Response(
+                    data={
+                        "error": "Failed to upload to DCM4CHE",
+                        "status_code": upload_response.status_code,
+                    },
+                    status=502,
+                )
+
+
+        except Exception as e:
             return Response(
                 data={"error": e.message, **e.extra},
                 status=e.status_code,
