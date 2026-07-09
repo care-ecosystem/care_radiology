@@ -13,12 +13,14 @@ from rest_framework.exceptions import AuthenticationFailed, ParseError
 
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
+from care.emr.models.tag_config import TagConfig
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.settings import plugin_settings
 
 STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
+VALID_MPPS_STATUSES = ["IN_PROGRESS", "COMPLETED", "DISCONTINUED"]
 
 
 class StaticAPIKeyAuthentication(BaseAuthentication):
@@ -97,32 +99,47 @@ class WebhookViewSet(ViewSet):
         detail=False,
         methods=["post"],
         url_path="status",
-        permission_classes=[AllowAny],
+        permission_classes=[AllowAny], # Need to add throttling & limit based on expected volume
     )
     def handle_mpps(self, request):
         """
-        Handle MPPS status updates from DICOM enabler
-        Updates ServiceRequest tags in CARE
+        Handle MPPS (Modality Performed Procedure Step) status updates from DICOM enabler.
+
+        MPPS is part of the DICOM standard for tracking the status of imaging procedures.
+        This webhook receives status updates and maps them to CARE ServiceRequest tags.
+
+        Expected Payload:
+        {
+            "service_request_id": "uuid-of-service-request",
+            "study_status": "STARTED" | "COMPLETED" | "DISCONTINUED" | "IN_PROGRESS"
+        }
+
+        Tag Mapping:
+        - Status values must match TagConfig.display values for the facility
+        - Each facility can have custom tag configurations
+        - Tags are appended to ServiceRequest.tags array (duplicates prevented)
+
+        Authentication:
+        - Requires CARE_RADIOLOGY_WEBHOOK_SECRET in Authorization header
+
+        Returns:
+            200: Tag updated successfully or already exists
+            400: Missing fields, invalid facility, or tag config not found
+            401: Invalid API key
+            404: ServiceRequest not found
+            500: Database error
         """
         logger.info("[MPPS] Webhook received!")
-        print("[MPPS] Webhook received!")  # Also print to console
         # Step 1: Authenticate
         authenticator = StaticAPIKeyAuthentication()
-        try:
-            authenticator.authenticate(request)
-            logger.info("[MPPS] Authentication passed")
-        except AuthenticationFailed:
-            logger.error("[MPPS] Authentication failed")
-            return Response(
-                {"detail": "Invalid API key"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
+        user_auth_tuple = authenticator.authenticate(request)
+        if user_auth_tuple is None:
+            raise AuthenticationFailed("Invalid API key")
 
         # Step 2: Parse webhook data
         try:
             data = request.data
             logger.info(f"[MPPS] Received data: {data}")
-            print(f"[MPPS] Received data: {data}")
         except ParseError:
             logger.error("[MPPS] Invalid JSON payload")
             return Response(
@@ -147,11 +164,16 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Step 5: Validate study_status value
+        if study_status not in VALID_MPPS_STATUSES:
+            logger.warning(f"[MPPS] Unexpected status: {study_status}")
+            # Still process it, but log warning
+
         # Log the webhook
         RadiologyWebhookLogs.objects.create(raw_data=data, type="MPPS")
         logger.info("[MPPS] Webhook logged to database")
 
-        # Step 5: Get ServiceRequest from CARE
+        # Step 6: Get ServiceRequest from CARE
         try:
             sr = ServiceRequest.objects.get(external_id=service_request_id)
             logger.info(f"[MPPS] ServiceRequest found: {sr.id}")
@@ -164,7 +186,7 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        #Step 6: Get facility from ServiceRequest
+        # Step 7: Get facility from ServiceRequest
         facility = sr.facility
         if not facility:
             logger.error("[MPPS] Facility not found for SR")
@@ -174,9 +196,7 @@ class WebhookViewSet(ViewSet):
             )
 
         logger.info(f"[MPPS] Facility found: {facility.external_id}")
-        # Step 7: Get TagConfig for MPPS status
-        from care.emr.models.tag_config import TagConfig
-
+        # Step 8: Get TagConfig for MPPS status
         try:
             tag_config = TagConfig.objects.filter(
                 facility=facility, display=study_status  # e.g., "STARTED"
@@ -201,7 +221,7 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Step 8: Update ServiceRequest tags directly via Django ORM
+        # Step 9: Update ServiceRequest tags directly via Django ORM
         try:    
             tags = sr.tags or []
             logger.info(f"[MPPS] Current tags before update: {tags}")
@@ -222,7 +242,11 @@ class WebhookViewSet(ViewSet):
 
             tags.append(tag_id)
             sr.tags = tags
-            sr.save(update_fields=["tags"])
+            sr.save(
+                update_fields=["tags"],
+                performer="system:dicom-enabler-mpps",  # Track performer
+                performer_details={"webhook_type": "MPPS", "study_status": study_status}
+            )
 
             logger.info(f"[MPPS] Tag {tag_id} appended to ServiceRequest tags")
             logger.info(f"[MPPS] Updated tags: {sr.tags}")
@@ -234,7 +258,7 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Step 9: Return success
+        # Step 10: Return success
         logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
         return Response(
             {
