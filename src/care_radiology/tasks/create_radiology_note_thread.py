@@ -1,3 +1,5 @@
+import re
+
 from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
@@ -9,27 +11,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _normalized_value(value: str, length: int = 3) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", value).upper()[:length]
+
 
 def generate_accession_number(service_request):
     year = timezone.now().year
-    facility = service_request.facility
-    modality = service_request.code.get("code") if service_request.code else None
+    year_suffix = str(year)[-2:]
 
-    facility_code = str(facility.external_id).replace("-", "")[:4].upper()
-    modality_code = str(modality)[:4].upper() if modality else "0000"
+    facility = service_request.facility
+    modality = service_request.code or {}
+
+    facility_code = _normalized_value(facility.name if facility else "")
+    modality_code = _normalized_value(modality.get("display") or "")
 
     with transaction.atomic():
         incremental_identifier = (
             ServiceRequest.objects.filter(
                 facility=facility,
                 created_date__year=year,
-                code__code=modality,
+                code__code=modality.get("code"),
             ).count()
             + 1
         )
 
     return (
-        f"ACC-{facility_code}-{modality_code}-{year}-{incremental_identifier:06d}"
+        f"AC{facility_code}{modality_code}{year_suffix}{incremental_identifier:06d}"
     )
 
 
