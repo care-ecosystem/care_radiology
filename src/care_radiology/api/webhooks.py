@@ -238,11 +238,7 @@ class WebhookViewSet(ViewSet):
 
             tags.append(tag_id)
             sr.tags = tags
-            sr.save(
-                update_fields=["tags"],
-                performer="system:dicom-enabler-mpps",  # Track performer
-                performer_details={"webhook_type": "MPPS", "study_status": study_status}
-            )
+            sr.save(update_fields=["tags"])
 
             logger.info(f"[MPPS] Tag {tag_id} appended to ServiceRequest tags")
             logger.info(f"[MPPS] Updated tags: {sr.tags}")
