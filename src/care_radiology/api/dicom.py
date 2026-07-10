@@ -1,3 +1,4 @@
+import logging
 from django.conf import settings
 
 from datetime import datetime
@@ -33,6 +34,7 @@ from care_radiology.services.dicom_service import (
 
 
 STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
+logger = logging.getLogger(__name__)
 
 class StaticAPIKeyAuthentication(BaseAuthentication):
     def authenticate(self, request):
@@ -250,13 +252,24 @@ def get_service_requests(
 
     if to_date:
         filters &= Q(created_date__lte=to_date)
-
+    logger.info("Service Request filters - modality=%s, from_date=%s, to_date=%s",
+    modality,
+    from_date,
+    to_date,
+    )
     qs = ServiceRequest.objects.filter(filters).select_related(
         "patient", "facility", "activity_definition"
     )[:limit]
 
     results = []
     for sr in qs:
+        body_site = None
+        description = None
+        if sr.activity_definition is not None:
+            if sr.activity_definition.body_site is not None:
+                body_site = sr.activity_definition.body_site.get("display")
+            if sr.activity_definition.code is not None:
+                description = sr.activity_definition.code.get("display")
         results.append(
             {
                 "service_request": {
@@ -264,7 +277,10 @@ def get_service_requests(
                     "external_id": sr.external_id,
                     "name": sr.activity_definition.title,
                     "date": sr.created_date,
-                    "meta": sr.meta
+                    "meta": sr.meta,
+                    "body_site": body_site,
+                    "description": description,
+                    "modality": modality
                 },
                 "facility": {
                     "id": sr.facility.external_id,
