@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 
@@ -19,6 +21,9 @@ from care_radiology.models.radiology_service_request import RadiologyServiceRequ
 from care_radiology.settings import plugin_settings
 
 STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
+VALID_MPPS_STATUSES = ["SCAN_STARTED", "SCAN_COMPLETED", "DISCONTINUED"]
+
+logger = logging.getLogger(__name__)
 
 
 class StaticAPIKeyAuthentication(BaseAuthentication):
