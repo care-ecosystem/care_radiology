@@ -285,7 +285,7 @@ def get_service_requests(
                 "last_name": sr.created_by.last_name,
             }
 
-        if sr.encounter is not None and sr.encounter.patient is not None:
+        if sr.patient is not None:
             patient_uhid = get_patient_uhid(sr.patient)
 
         results.append(
