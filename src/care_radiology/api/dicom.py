@@ -252,24 +252,42 @@ def get_service_requests(
 
     if to_date:
         filters &= Q(created_date__lte=to_date)
+
     logger.info("Service Request filters - modality=%s, from_date=%s, to_date=%s",
-    modality,
-    from_date,
-    to_date,
+        modality,
+        from_date,
+        to_date,
     )
+
     qs = ServiceRequest.objects.filter(filters).select_related(
-        "patient", "facility", "activity_definition"
+        "patient", "facility", "activity_definition", "created_by"
     )[:limit]
 
     results = []
     for sr in qs:
         body_site = None
         description = None
+        procedure_id = None
+        created_by = None
+        patient_uhid = None
+
         if sr.activity_definition is not None:
             if sr.activity_definition.body_site is not None:
                 body_site = sr.activity_definition.body_site.get("display")
             if sr.activity_definition.code is not None:
                 description = sr.activity_definition.code.get("display")
+                procedure_id = sr.activity_definition.code.get("code")
+
+        if sr.created_by is not None:
+            created_by = {
+                "prefix": sr.created_by.prefix,
+                "first_name": sr.created_by.first_name,
+                "last_name": sr.created_by.last_name,
+            }
+
+        if sr.patient is not None:
+            patient_uhid = get_patient_uhid(sr.patient)
+
         results.append(
             {
                 "service_request": {
@@ -280,7 +298,12 @@ def get_service_requests(
                     "meta": sr.meta,
                     "body_site": body_site,
                     "description": description,
-                    "modality": modality
+                    "modality": modality,
+                    "procedure_id": procedure_id,
+                    "created_by": created_by,
+                    "priority": sr.priority,
+                    "technician_instruction": sr.note,
+                    "patient_instruction": sr.patient_instruction
                 },
                 "facility": {
                     "id": sr.facility.external_id,
@@ -293,7 +316,8 @@ def get_service_requests(
                     "address": sr.patient.address,
                     "phone_number": sr.patient.phone_number,
                     "gender": sr.patient.gender,
-                    "age": sr.patient.age
+                    "age": sr.patient.age,
+                    "patient_uhid": patient_uhid
                 }
             }
         )
@@ -311,3 +335,40 @@ def parse_date(date_str):
     except ValueError:
         # Fallback to date-only if time not provided
         return datetime.strptime(date_str, "%Y-%m-%d")
+
+
+def get_patient_uhid(patient):
+    from care.emr.models.patient import PatientIdentifierConfigCache
+
+    identifiers = patient.instance_identifiers
+    if not isinstance(identifiers, list):
+        return None
+
+    for identifier in identifiers:
+        if not isinstance(identifier, dict):
+            continue
+
+        config_external_id = identifier.get("config")
+        if not config_external_id:
+            continue
+
+        try:
+            config = PatientIdentifierConfigCache.get_config(config_external_id)
+        except Exception:
+            logger.warning(
+                "Failed to resolve patient identifier config %s",
+                config_external_id,
+                exc_info=True,
+            )
+            continue
+
+        nested = config.get("config") if isinstance(config, dict) else None
+        if not isinstance(nested, dict):
+            continue
+
+        display = nested.get("display")
+
+        if isinstance(display, str) and display.lower() == "uhid":
+            return identifier.get("value")
+
+    return None
