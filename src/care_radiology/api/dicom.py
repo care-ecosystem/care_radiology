@@ -286,7 +286,7 @@ def get_service_requests(
             }
 
         if sr.encounter is not None and sr.encounter.patient is not None:
-            patient_uhid = get_patient_uhid(sr.encounter.patient)
+            patient_uhid = get_patient_uhid(sr.patient)
 
         results.append(
             {
@@ -355,6 +355,11 @@ def get_patient_uhid(patient):
         try:
             config = PatientIdentifierConfigCache.get_config(config_external_id)
         except Exception:
+            logger.warning(
+                "Failed to resolve patient identifier config %s",
+                config_external_id,
+                exc_info=True,
+            )
             continue
 
         nested = config.get("config") if isinstance(config, dict) else None
