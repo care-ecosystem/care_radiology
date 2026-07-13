@@ -260,7 +260,7 @@ def get_service_requests(
     )
 
     qs = ServiceRequest.objects.filter(filters).select_related(
-        "patient", "facility", "activity_definition"
+        "patient", "facility", "activity_definition", "created_by"
     )[:limit]
 
     results = []
