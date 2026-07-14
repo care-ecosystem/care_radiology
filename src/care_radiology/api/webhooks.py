@@ -45,6 +45,49 @@ class WebhookViewSet(ViewSet):
         permission_classes=[AllowAny],
     )
     def save_webhook(self, request):
+        """
+        Handle DICOM study completion webhook from DICOM Enabler.
+
+        Links uploaded DICOM studies to CARE service requests.
+
+        Expected Payload Options:
+
+        Option 1: Lookup by service_request_id (Priority 1)
+        {
+            "service_request_id": "uuid-of-service-request",
+            "study_id": "DICOM Study Instance UID",
+            "series_count": 3,
+            "instance_count": 120
+        }
+
+        Option 2: Lookup by accession_number (Priority 2)
+        {
+            "accession_number": "ACJAYCTO26000004",
+            "study_id": "DICOM Study Instance UID",
+            "series_count": 3,
+            "instance_count": 120
+        }
+
+        Option 3: Lookup by patient_id (Fallback)
+        {
+            "patient_id": "patient-identifier",
+            "study_id": "DICOM Study Instance UID"
+        }
+
+        Service Request Lookup Priority:
+        1. service_request_id (ServiceRequest.external_id) - Direct UUID lookup
+        2. accession_number (ServiceRequest.meta.accession_number) - JSON field query
+        3. patient_id (Patient.instance_identifiers) - Creates study without SR link
+
+        Authentication:
+        - Requires CARE_RADIOLOGY_WEBHOOK_SECRET in Authorization header
+
+        Returns:
+            200: Study linked successfully with record details
+            400: Invalid JSON payload or missing required fields
+            401: Invalid API key
+            409: Service request or patient not found (conflict)
+        """
         # Manually authenticate
         authenticator = StaticAPIKeyAuthentication()
         user_auth_tuple = authenticator.authenticate(request)
