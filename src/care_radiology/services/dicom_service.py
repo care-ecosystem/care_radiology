@@ -120,9 +120,17 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
 
 
 def process_study_webhook(data):
-    if data.get("service_request_id") and data.get("study_id"):
+    # Support lookup by either service_request_id or accession_number
+    if (data.get("service_request_id") or data.get("accession_number")) and data.get("study_id"):
         try:
-            sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
+            if data.get("service_request_id"):
+                # Priority 1: Lookup by service_request_id (external_id)
+                sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
+            elif data.get("accession_number"):
+                # Priority 2: Lookup by accession_number in meta JSON field
+                sr = ServiceRequest.objects.get(meta__accession_number=data["accession_number"])
+            else:
+                raise WebhookConflictError("No service_request_id or accession_number provided")
         except ServiceRequest.DoesNotExist:
             raise WebhookConflictError("No matching service request")
 
