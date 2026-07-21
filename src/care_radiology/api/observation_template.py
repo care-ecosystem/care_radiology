@@ -57,11 +57,11 @@ class ObservationTemplateViewSet(
             .prefetch_related("data")
         )
         if self.action in ("update", "partial_update"):
-            facility_id = self.request.data.get("facility_id")
+            facility = self.request.data.get("facility")
         else:
-            facility_id = self.request.query_params.get("facility_id")
+            facility = self.request.query_params.get("facility")
 
-        if not facility_id:
-            raise ValidationError({"facility_id": "This value is required"})
-        qs = qs.filter(facility__external_id=facility_id)
+        if not facility:
+            raise ValidationError({"facility": "This value is required"})
+        qs = qs.filter(facility__external_id=facility)
         return qs.order_by("-created_date")
