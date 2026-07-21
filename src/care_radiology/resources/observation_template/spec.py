@@ -1,3 +1,4 @@
+from django.db import transaction
 from pydantic import UUID4, BaseModel, field_validator
 
 from care.emr.models.activity_definition import ActivityDefinition
@@ -77,19 +78,20 @@ class ObservationTemplateCreateSpec(BaseObservationTemplateSpec):
             if self.activity_definition
             else None
         )
-        obj.save()
-        obj.data.all().delete()
-        ObservationTemplateData.objects.bulk_create(
-            [
-                ObservationTemplateData(
-                    template=obj,
-                    code=field.code,
-                    value=field.value,
-                    description=field.description,
-                )
-                for field in self.fields
-            ]
-        )
+        with transaction.atomic():
+            obj.save()
+            obj.data.all().delete()
+            ObservationTemplateData.objects.bulk_create(
+                [
+                    ObservationTemplateData(
+                        template=obj,
+                        code=field.code,
+                        value=field.value,
+                        description=field.description,
+                    )
+                    for field in self.fields
+                ]
+            )
 
 
 class ObservationTemplateUpdateSpec(EMRResource):
