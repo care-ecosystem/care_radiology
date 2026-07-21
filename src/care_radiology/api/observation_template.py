@@ -19,7 +19,6 @@ from care_radiology.resources.observation_template.spec import (
 
 
 class ObservationTemplateFilters(filters.FilterSet):
-    facility = filters.UUIDFilter(field_name="facility__external_id")
     observation_definition = filters.UUIDFilter(
         field_name="observation_definition__external_id"
     )
@@ -57,9 +56,12 @@ class ObservationTemplateViewSet(
             )
             .prefetch_related("data")
         )
-        if self.action == "list":
-            facility = self.request.query_params.get("facility")
-            if not facility:
-                raise ValidationError({"facility": "This query parameter is required"})
-            qs = qs.filter(facility__external_id=facility)
+        if self.action in ("update", "partial_update"):
+            facility_id = self.request.data.get("facility_id")
+        else:
+            facility_id = self.request.query_params.get("facility_id")
+
+        if not facility_id:
+            raise ValidationError({"facility_id": "This value is required"})
+        qs = qs.filter(facility__external_id=facility_id)
         return qs.order_by("-created_date")
