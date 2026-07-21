@@ -11,6 +11,7 @@ from care_radiology.api.scan_protocol import ScanProtocolViewSet
 from care_radiology.api.template import TemplateViewSet
 from care_radiology.api.study_report import StudyReportViewSet
 from care_radiology.api.study_report_audit import StudyReportAuditViewSet
+from care_radiology.api.observation_template import ObservationTemplateViewSet
 
 
 def healthy(request):
@@ -27,6 +28,11 @@ router.register("scan_protocol", ScanProtocolViewSet, basename="radiology_scan_p
 router.register("template", TemplateViewSet, basename="radiology_template")
 router.register("study_report", StudyReportViewSet, basename="radiology_study_report")
 router.register("study-report-audits", StudyReportAuditViewSet, basename="study-report-audits")
+router.register(
+    "observation_template",
+    ObservationTemplateViewSet,
+    basename="radiology_observation_template",
+)
 
 urlpatterns = [
     path("health", healthy),
