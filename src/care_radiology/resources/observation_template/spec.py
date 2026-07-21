@@ -2,11 +2,8 @@ from django.db import transaction
 from pydantic import UUID4, BaseModel, field_validator
 
 from care.emr.models.activity_definition import ActivityDefinition
-from care.emr.resources.activity_definition.spec import BaseActivityDefinitionSpec
 from care.emr.resources.base import EMRResource
-from care.emr.resources.facility.spec import FacilityBareMinimumSpec
 from care.emr.models.observation_definition import ObservationDefinition
-from care.emr.resources.observation_definition.spec import BaseObservationDefinitionSpec
 from care.facility.models import Facility
 
 from care_radiology.models.observation_template import (
@@ -101,22 +98,18 @@ class ObservationTemplateUpdateSpec(EMRResource):
 
 
 class ObservationTemplateReadSpec(BaseObservationTemplateSpec):
-    facility: dict | None = None
-    observation_definition: dict | None = None
-    activity_definition: dict | None = None
+    facility: UUID4 | None = None
+    observation_definition: UUID4 | None = None
+    activity_definition: UUID4 | None = None
     fields: list[ObservationTemplateFieldSpec] = []
 
     @classmethod
     def perform_extra_serialization(cls, mapping, obj):
         mapping["id"] = obj.external_id
-        mapping["facility"] = FacilityBareMinimumSpec.serialize(obj.facility).to_json()
-        mapping["observation_definition"] = BaseObservationDefinitionSpec.serialize(
-            obj.observation_definition
-        ).to_json()
+        mapping["facility"] = obj.facility.external_id
+        mapping["observation_definition"] = obj.observation_definition.external_id
         mapping["activity_definition"] = (
-            BaseActivityDefinitionSpec.serialize(obj.activity_definition).to_json()
-            if obj.activity_definition
-            else None
+            obj.activity_definition.external_id if obj.activity_definition else None
         )
         mapping["fields"] = [
             {"code": data.code, "value": data.value, "description": data.description}
