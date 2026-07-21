@@ -2,7 +2,13 @@ from django_filters import rest_framework as filters
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter
 
-from care.emr.api.viewsets.base import EMRModelViewSet
+from care.emr.api.viewsets.base import (
+    EMRBaseViewSet,
+    EMRCreateMixin,
+    EMRListMixin,
+    EMRRetrieveMixin,
+    EMRUpdateMixin,
+)
 
 from care_radiology.models.observation_template import ObservationTemplate
 from care_radiology.resources.observation_template.spec import (
@@ -23,7 +29,13 @@ class ObservationTemplateFilters(filters.FilterSet):
     title = filters.CharFilter(lookup_expr="icontains")
 
 
-class ObservationTemplateViewSet(EMRModelViewSet):
+class ObservationTemplateViewSet(
+    EMRCreateMixin,
+    EMRRetrieveMixin,
+    EMRUpdateMixin,
+    EMRListMixin,
+    EMRBaseViewSet,
+):
     """CRUD API for saving observation templates"""
 
     database_model = ObservationTemplate
