@@ -6,6 +6,7 @@ from .body_part import *
 from .scan_protocol import *
 from .template import *
 from .study_report import *
+from .observation_template import *
 
 
 # __all__ = [DicomStudy, RadiologyServiceRequest, RadiologyWebhookLogs]
