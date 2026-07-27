@@ -73,20 +73,19 @@ class ObservationTemplateViewSet(
             )
             .prefetch_related("data")
         )
-        if self.action in ("update", "partial_update"):
-            facility = self.request.data.get("facility")
-        else:
-            facility = self.request.query_params.get("facility")
-
-        if not facility:
-            raise ValidationError({"facility": "This value is required"})
-
         if not AuthorizationController.call(
             "can_read_radiology_report", self.request.user
         ):
             raise PermissionDenied(
                 "You do not have permission to read templates"
             )
+
+        if self.action in ("update", "partial_update"):
+            return qs.order_by("-created_date")
+
+        facility = self.request.query_params.get("facility")
+        if not facility:
+            raise ValidationError({"facility": "This value is required"})
 
         qs = qs.filter(facility__external_id=facility)
         return qs.order_by("-created_date")
