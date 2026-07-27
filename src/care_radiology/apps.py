@@ -43,14 +43,16 @@ class CareRadiologyPluginConfig(AppConfig):
 
         from care.security.authorization.base import (AuthorizationHandler, AuthorizationController)
         class RadiologyReportAccess(AuthorizationHandler):
-            def can_read_radiology_report(self, user):
+            def can_read_radiology_report(self, user, facility=None):
                 return self.check_permission_in_facility_organization(
                     permissions=[RadiologyReportPermissions.can_read_radiology_report.name],
-                    user=user
+                    user=user,
+                    facility=facility,
                 )
-            def can_write_radiology_report(self, user):
+            def can_write_radiology_report(self, user, facility=None):
                 return self.check_permission_in_facility_organization(
                     permissions=[RadiologyReportPermissions.can_write_radiology_report.name],
-                    user=user
+                    user=user,
+                    facility=facility,
                 )
         AuthorizationController.register_internal_controller(RadiologyReportAccess)
