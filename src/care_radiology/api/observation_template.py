@@ -1,5 +1,5 @@
 from django_filters import rest_framework as filters
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
 
 from care.emr.api.viewsets.base import (
@@ -9,6 +9,7 @@ from care.emr.api.viewsets.base import (
     EMRRetrieveMixin,
     EMRUpdateMixin,
 )
+from care.security.authorization import AuthorizationController
 
 from care_radiology.models.observation_template import ObservationTemplate
 from care_radiology.resources.observation_template.spec import (
@@ -45,6 +46,22 @@ class ObservationTemplateViewSet(
     filter_backends = [filters.DjangoFilterBackend, OrderingFilter]
     ordering_fields = ["created_date", "modified_date"]
 
+    def authorize_create(self, request_obj):
+        if not AuthorizationController.call(
+            "can_write_radiology_report", self.request.user
+        ):
+            raise PermissionDenied(
+                "You do not have permission to create templates"
+            )
+
+    def authorize_update(self, request_obj, model_instance):
+        if not AuthorizationController.call(
+            "can_write_radiology_report", self.request.user
+        ):
+            raise PermissionDenied(
+                "You do not have permission to update templates"
+            )
+
     def get_queryset(self):
         qs = (
             super()
@@ -63,5 +80,13 @@ class ObservationTemplateViewSet(
 
         if not facility:
             raise ValidationError({"facility": "This value is required"})
+
+        if not AuthorizationController.call(
+            "can_read_radiology_report", self.request.user
+        ):
+            raise PermissionDenied(
+                "You do not have permission to read templates"
+            )
+
         qs = qs.filter(facility__external_id=facility)
         return qs.order_by("-created_date")
