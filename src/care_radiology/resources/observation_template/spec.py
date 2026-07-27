@@ -14,7 +14,7 @@ from care_radiology.models.observation_template import (
 
 class ObservationTemplateFieldSpec(BaseModel):
     code: str
-    value: str
+    value: str | None = None
     description: str | None = None
 
 
