@@ -9,6 +9,7 @@ from care.emr.api.viewsets.base import (
     EMRRetrieveMixin,
     EMRUpdateMixin,
 )
+from care.facility.models import Facility
 from care.security.authorization import AuthorizationController
 
 from care_radiology.models.observation_template import ObservationTemplate
@@ -47,19 +48,22 @@ class ObservationTemplateViewSet(
     ordering_fields = ["created_date", "modified_date"]
 
     def authorize_create(self, request_obj):
+        facility = Facility.objects.get(external_id=request_obj.facility)
         if not AuthorizationController.call(
-            "can_write_radiology_report", self.request.user
+            "can_write_radiology_report", self.request.user, facility=facility
         ):
             raise PermissionDenied(
-                "You do not have permission to create templates"
+                "You do not have permission to create templates for this facility"
             )
 
     def authorize_update(self, request_obj, model_instance):
         if not AuthorizationController.call(
-            "can_write_radiology_report", self.request.user
+            "can_write_radiology_report",
+            self.request.user,
+            facility=model_instance.facility,
         ):
             raise PermissionDenied(
-                "You do not have permission to update templates"
+                "You do not have permission to update templates for this facility"
             )
 
     def get_queryset(self):
@@ -73,16 +77,17 @@ class ObservationTemplateViewSet(
             )
             .prefetch_related("data")
         )
-        if not AuthorizationController.call(
-            "can_read_radiology_report", self.request.user
-        ):
-            raise PermissionDenied(
-                "You do not have permission to read templates"
-            )
-
         facility = self.request.query_params.get("facility")
         if not facility:
             raise ValidationError({"facility": "This value is required"})
+
+        facility_obj = Facility.objects.filter(external_id=facility).first()
+        if not facility_obj or not AuthorizationController.call(
+            "can_read_radiology_report", self.request.user, facility=facility_obj
+        ):
+            raise PermissionDenied(
+                "You do not have permission to read templates for this facility"
+            )
 
         qs = qs.filter(facility__external_id=facility)
         return qs.order_by("-created_date")
