@@ -38,7 +38,7 @@ class ObservationTemplateData(models.Model):
         ObservationTemplate, on_delete=models.CASCADE, related_name="data"
     )
     code = models.CharField(max_length=255)
-    value = models.TextField()
+    value = models.TextField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
 
     def __str__(self):

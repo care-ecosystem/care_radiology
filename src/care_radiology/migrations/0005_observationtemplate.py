@@ -85,7 +85,7 @@ class Migration(migrations.Migration):
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("code", models.CharField(max_length=255)),
-                ("value", models.TextField()),
+                ("value", models.TextField(blank=True, null=True)),
                 ("description", models.TextField(blank=True, null=True)),
                 (
                     "template",
