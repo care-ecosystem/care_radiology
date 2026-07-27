@@ -104,4 +104,11 @@ class Migration(migrations.Migration):
                 name="care_radiol_obs_def_act_def_idx",
             ),
         ),
+        migrations.AddConstraint(
+            model_name="observationtemplate",
+            constraint=models.UniqueConstraint(
+                fields=["facility", "title"],
+                name="unique_facility_observation_template_title",
+            ),
+        ),
     ]

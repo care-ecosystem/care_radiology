@@ -1,5 +1,6 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from pydantic import UUID4, BaseModel, field_validator
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from care.emr.models.activity_definition import ActivityDefinition
 from care.emr.resources.base import EMRResource
@@ -76,7 +77,13 @@ class ObservationTemplateCreateSpec(BaseObservationTemplateSpec):
             else None
         )
         with transaction.atomic():
-            obj.save()
+            try:
+                with transaction.atomic():
+                    obj.save()
+            except IntegrityError as e:
+                raise DRFValidationError(
+                    {"title": "A template with this title already exists for this facility"}
+                ) from e
             obj.data.all().delete()
             ObservationTemplateData.objects.bulk_create(
                 [
