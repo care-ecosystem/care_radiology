@@ -80,9 +80,6 @@ class ObservationTemplateViewSet(
                 "You do not have permission to read templates"
             )
 
-        if self.action in ("update", "partial_update"):
-            return qs.order_by("-created_date")
-
         facility = self.request.query_params.get("facility")
         if not facility:
             raise ValidationError({"facility": "This value is required"})
