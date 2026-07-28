@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from django_filters import rest_framework as filters
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
@@ -65,6 +66,14 @@ class ObservationTemplateViewSet(
             raise PermissionDenied(
                 "You do not have permission to update templates for this facility"
             )
+
+    def perform_update(self, instance):
+        try:
+            super().perform_update(instance)
+        except IntegrityError as e:
+            raise ValidationError(
+                {"title": "A template with this title already exists for this facility"}
+            ) from e
 
     def get_queryset(self):
         qs = (

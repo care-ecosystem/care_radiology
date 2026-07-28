@@ -28,6 +28,9 @@ class ObservationTemplate(EMRBaseModel):
         indexes = [
             models.Index(fields=["observation_definition", "activity_definition"]),
         ]
+        constraints = [
+            models.UniqueConstraint(fields=["facility", "title"], name="unique_facility_observation_template_title"),
+        ]
 
     def __str__(self):
         return f"ObservationTemplate: {self.title}"
