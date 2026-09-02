@@ -29,4 +29,4 @@ setup-dicom-db:
 
 ldap-setup:
 	ldapmodify -x -D "cn=admin,dc=dcm4che,dc=org" -H ldap://localhost:3890 -W -f bucketconfig.ldif
-	-ldapmodify -x -D "cn=admin,dc=dcm4che,dc=org" -H ldap://localhost:3890 -W -f compressionrule.ldif
+	ldapmodify -x -D "cn=admin,dc=dcm4che,dc=org" -H ldap://localhost:3890 -W -f compressionrule.ldif
