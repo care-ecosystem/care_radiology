@@ -1,0 +1,6 @@
+dn: cn=JPEG-LS Lossless,dicomDeviceName=dcm4chee-arc,cn=Devices,cn=DICOM Configuration,dc=dcm4che,dc=org
+changetype: add
+objectClass: dcmArchiveCompressionRule
+cn: JPEG-LS Lossless
+dicomTransferSyntax: 1.2.840.10008.1.2.4.80
+dcmImageWriteParam: maxPixelValueError=0.0
