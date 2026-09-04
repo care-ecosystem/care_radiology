@@ -1,11 +1,11 @@
-from django.conf import settings
 import requests
 
 from enum import Enum
 from datetime import datetime
 
+from care_radiology.settings import plugin_settings
 
-DCM4CHEE_BASEURL = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL']
+DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
 class DICOM_TAG(Enum):
     # Study Tags

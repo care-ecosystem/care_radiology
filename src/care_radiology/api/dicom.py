@@ -1,5 +1,4 @@
 import logging
-from django.conf import settings
 
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,9 +30,10 @@ from care_radiology.services.dicom_service import (
     link_service_request_to_study,
     upload_dicom_file,
 )
+from care_radiology.settings import plugin_settings
 
 
-STATIC_API_KEY = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_WEBHOOK_SECRET']
+STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
 logger = logging.getLogger(__name__)
 
 class StaticAPIKeyAuthentication(BaseAuthentication):

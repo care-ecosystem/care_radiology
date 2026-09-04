@@ -1,4 +1,3 @@
-from django.conf import settings
 import requests
 
 from django.core.cache import cache
@@ -17,9 +16,10 @@ from care_radiology.utils.dicom import (
     d_query_study,
     encode_file_multipart_related,
 )
+from care_radiology.settings import plugin_settings
 
 
-DCM4CHEE_BASEURL = settings.PLUGIN_CONFIGS['care_radiology']['CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL']
+DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
 
 class DicomUploadError(Exception):
