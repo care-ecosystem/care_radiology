@@ -12,10 +12,8 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed, ParseError
 
 
-from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
-from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.services.dicom_service import (
     WebhookConflictError,
