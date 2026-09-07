@@ -5,12 +5,12 @@ info:
     API specification for the Radiology Plugin for CARE.
 
     This plugin enables radiology workflows within CARE:
-    - Manage imaging modality types (CT, MRI, X-Ray, etc.)
-    - Manage body parts and scan protocols
-    - Upload DICOM files and retrieve studies from DCM4CHEE (Orthanc)
-    - Create and manage radiologist study reports with full audit trails
-    - Save reusable report templates per user
-    - Receive study notifications via webhook from the DICOM modality worklist
+    - Upload DICOM files and retrieve studies from DCM4CHEE
+    - Link DICOM studies to CARE service requests
+    - Serve a DICOM modality worklist and receive study/MPPS status webhooks from the
+      DICOM modality worklist server
+    - Manage per-facility observation templates used to structure diagnostic report
+      observations
 
     **Care Plugin Conventions:**
     - All `id` / `external_id` fields exposed via API are UUIDs (the table's `external_id`).
@@ -35,420 +35,17 @@ servers:
     description: Egov server
 
 tags:
-  - name: Modality Types
-    description: Manage imaging modality types (CT, MRI, X-Ray, Ultrasound, etc.)
-  - name: Body Parts
-    description: Manage body parts associated with a modality
-  - name: Scan Protocols
-    description: Manage scan protocols (combinations of modality + body part)
   - name: DICOM Studies
     description: Upload DICOM files and retrieve study metadata from DCM4CHEE
-  - name: Study Reports
-    description: Create and retrieve radiologist reports for DICOM studies
-  - name: Study Report Audits
-    description: Read-only audit trail for study report changes
-  - name: Templates
-    description: Manage per-user reusable report templates
   - name: Webhooks
-    description: Receive DICOM study notifications from the modality worklist server
+    description: Receive DICOM study and MPPS status notifications from the modality worklist server
+  - name: Observation Templates
+    description: Manage per-facility reusable observation templates used to structure diagnostic report observations
 
 security:
   - BearerAuth: []
 
 paths:
-  # ---------- Modality Types ----------
-  /api/care_radiology/modality_type/:
-    get:
-      tags:
-        - Modality Types
-      summary: List modality types
-      operationId: listModalityTypes
-      parameters:
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of modality types
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ModalityTypeList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-    post:
-      tags:
-        - Modality Types
-      summary: Create modality type
-      description: |
-        Create a new imaging modality type. If a soft-deleted record with the same
-        `display_name` exists, it is revived instead of creating a duplicate.
-        `display_name` is unique across all modality types.
-      operationId: createModalityType
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ModalityTypeCreate'
-            example:
-              display_name: "CT"
-              coding:
-                - coding_system: "http://dicom.nema.org/resources/ontology/DCM"
-                  coding_code: "CT"
-                  coding_display: "Computed Tomography"
-      responses:
-        '201':
-          description: Modality type created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ModalityType'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '409':
-          description: Conflict — display_name already exists
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                error: "Modality type 'CT' already exists."
-
-  /api/care_radiology/modality_type/{id}/:
-    get:
-      tags:
-        - Modality Types
-      summary: Retrieve modality type
-      operationId: getModalityType
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Modality type detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ModalityType'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    patch:
-      tags:
-        - Modality Types
-      summary: Update modality type
-      operationId: updateModalityType
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ModalityTypeUpdate'
-      responses:
-        '200':
-          description: Modality type updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ModalityType'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    delete:
-      tags:
-        - Modality Types
-      summary: Delete modality type (soft-delete)
-      operationId: deleteModalityType
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Modality type deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ModalityType'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  # ---------- Body Parts ----------
-  /api/care_radiology/body_part/:
-    get:
-      tags:
-        - Body Parts
-      summary: List body parts
-      operationId: listBodyParts
-      parameters:
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of body parts
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BodyPartList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-    post:
-      tags:
-        - Body Parts
-      summary: Create body part
-      description: |
-        Create a new body part linked to a modality. If a soft-deleted record with the same
-        `display_name` and `modality` exists, it is revived.
-        UNIQUE(display_name, modality).
-      operationId: createBodyPart
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BodyPartCreate'
-            example:
-              modality: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              display_name: "Chest"
-              coding:
-                - coding_system: "http://snomed.info/sct"
-                  coding_code: "51185008"
-                  coding_display: "Thoracic structure"
-      responses:
-        '201':
-          description: Body part created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BodyPart'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          description: Modality not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Conflict — body part already exists for this modality
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                error: "Body part 'Chest' already exists for CT."
-
-  /api/care_radiology/body_part/{id}/:
-    get:
-      tags:
-        - Body Parts
-      summary: Retrieve body part
-      operationId: getBodyPart
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Body part detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BodyPart'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    patch:
-      tags:
-        - Body Parts
-      summary: Update body part
-      operationId: updateBodyPart
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BodyPartUpdate'
-      responses:
-        '200':
-          description: Body part updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BodyPart'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    delete:
-      tags:
-        - Body Parts
-      summary: Delete body part (soft-delete)
-      operationId: deleteBodyPart
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Body part deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BodyPart'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  # ---------- Scan Protocols ----------
-  /api/care_radiology/scan_protocol/:
-    get:
-      tags:
-        - Scan Protocols
-      summary: List scan protocols
-      operationId: listScanProtocols
-      parameters:
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of scan protocols
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScanProtocolList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-    post:
-      tags:
-        - Scan Protocols
-      summary: Create scan protocol
-      description: |
-        Create a new scan protocol combining a modality and body part.
-        If a soft-deleted record with the same (display_name, modality, body_part) exists,
-        it is revived. UNIQUE(display_name, modality, body_part).
-      operationId: createScanProtocol
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ScanProtocolCreate'
-            example:
-              modality: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              body_part: "7ab2c3d4-5678-4e9f-a012-bcdef0123456"
-              display_name: "CT Chest with Contrast"
-              coding:
-                - coding_system: "http://loinc.org"
-                  coding_code: "24627-2"
-                  coding_display: "CT Chest"
-      responses:
-        '201':
-          description: Scan protocol created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScanProtocol'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '409':
-          description: Conflict — scan protocol already exists for this (modality, body part)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                error: "Scan protocol 'CT Chest with Contrast' already exists for CT - Chest."
-
-  /api/care_radiology/scan_protocol/{id}/:
-    get:
-      tags:
-        - Scan Protocols
-      summary: Retrieve scan protocol
-      operationId: getScanProtocol
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Scan protocol detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScanProtocol'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    patch:
-      tags:
-        - Scan Protocols
-      summary: Update scan protocol
-      operationId: updateScanProtocol
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ScanProtocolUpdate'
-      responses:
-        '200':
-          description: Scan protocol updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScanProtocol'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    delete:
-      tags:
-        - Scan Protocols
-      summary: Delete scan protocol (soft-delete)
-      operationId: deleteScanProtocol
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Scan protocol deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ScanProtocol'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   # ---------- DICOM Studies ----------
   /api/care_radiology/dicom/authenticate/:
     get:
@@ -564,7 +161,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: "DICOM file uploaded to DCM4CHE successfully"
+                    example: "DICOM files uploaded to DCM4CHE successfully"
                   study_uid:
                     type: string
                     description: DICOM Study Instance UID
@@ -633,7 +230,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: "DICOM file uploaded to Orthanc successfully"
+                    example: "DICOM files uploaded to Orthanc successfully"
                   study_uid:
                     type: string
                     description: DICOM Study Instance UID
@@ -663,6 +260,70 @@ paths:
                 status_code: 503
         '500':
           $ref: '#/components/responses/InternalServerError'
+
+  /api/care_radiology/dicom/link-service-request/:
+    post:
+      tags:
+        - DICOM Studies
+      summary: Link an uploaded study to a service request
+      description: |
+        Links an already-uploaded DICOM study to a CARE `ServiceRequest`. Called once
+        all files for a study have finished uploading via `upload` / `upload-dicom-external`.
+
+        Requires `can_write_service_request` permission on the service request.
+      operationId: dicomLinkServiceRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service_request_id
+                - study_uid
+              properties:
+                service_request_id:
+                  type: string
+                  format: uuid
+                  description: ServiceRequest external_id
+                study_uid:
+                  type: string
+                  description: DICOM Study Instance UID
+      responses:
+        '200':
+          description: Service request linked to study successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: "Service request linked to study successfully"
+                  record:
+                    type: object
+                    properties:
+                      external_id:
+                        type: string
+                        format: uuid
+                        description: RadiologyServiceRequest external_id
+                      data:
+                        type: object
+                        description: Raw payload stored on the link record
+        '400':
+          description: service_request_id and study_uid are required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "service_request_id and study_uid are required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /api/care_radiology/dicom/studies/:
     get:
@@ -736,312 +397,6 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  # ---------- Study Reports ----------
-  /api/care_radiology/study_report/:
-    get:
-      tags:
-        - Study Reports
-      summary: List study reports
-      description: |
-        Returns study reports. Filter by `study` (DICOM study external_id UUID) to get
-        reports for a specific study.
-
-        Requires `can_read_radiology_report` permission.
-      operationId: listStudyReports
-      parameters:
-        - name: study
-          in: query
-          description: Filter by DicomStudy external_id
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of study reports
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReportList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-
-    post:
-      tags:
-        - Study Reports
-      summary: Create study report
-      description: |
-        Creates a new study report for a DICOM study. A study can have multiple reports.
-        An audit record (`action: "Created"`) is written on creation with `created_by`
-        and `updated_by` set to the requesting user.
-
-        Requires `can_write_radiology_report` permission.
-      operationId: createStudyReport
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StudyReportCreate'
-            example:
-              study: "9c0d11ee-aabb-44cc-aa11-bb22cc33dd44"
-              modality: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              body_part: "7ab2c3d4-5678-4e9f-a012-bcdef0123456"
-              scan_protocol: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-              technique: "Axial sections with 5mm slice thickness"
-              findings: "No acute cardiopulmonary process identified."
-              impression: "Normal chest radiograph."
-      responses:
-        '201':
-          description: Study report created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReport'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-
-  /api/care_radiology/study_report/{id}/:
-    get:
-      tags:
-        - Study Reports
-      summary: Retrieve study report
-      operationId: getStudyReport
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Study report detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReport'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    patch:
-      tags:
-        - Study Reports
-      summary: Update study report
-      description: |
-        Partially updates an existing study report identified by its `external_id`.
-        Only fields included in the request body are changed; omitted fields retain
-        their current values.
-
-        An audit record (`action: "Updated"`) is written only if at least one field
-        actually changed, recording `old_value` and `new_value` keyed by field name.
-        `created_by` and `updated_by` on the audit record are set to the requesting user.
-
-        Requires `can_write_radiology_report` permission.
-      operationId: updateStudyReport
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StudyReportUpdate'
-            example:
-              findings: "Small pleural effusion on the right."
-              impression: "Pleural effusion, right side."
-      responses:
-        '200':
-          description: Study report updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReport'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    delete:
-      tags:
-        - Study Reports
-      summary: Delete study report (soft-delete)
-      operationId: deleteStudyReport
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Study report deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReport'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  # ---------- Study Report Audits ----------
-  /api/care_radiology/study-report-audits/:
-    get:
-      tags:
-        - Study Report Audits
-      summary: List study report audit entries
-      description: |
-        Read-only list of audit records. Filter by `study_report` (external_id UUID)
-        to see the change history for a specific report. Ordered by `created_date`
-        (oldest first by default).
-      operationId: listStudyReportAudits
-      parameters:
-        - name: study_report
-          in: query
-          description: Filter by StudyReport external_id
-          schema:
-            type: string
-            format: uuid
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of audit entries
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReportAuditList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/care_radiology/study-report-audits/{id}/:
-    get:
-      tags:
-        - Study Report Audits
-      summary: Retrieve audit entry
-      operationId: getStudyReportAudit
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Audit entry detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StudyReportAudit'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  # ---------- Templates ----------
-  /api/care_radiology/template/:
-    get:
-      tags:
-        - Templates
-      summary: List templates for the current user
-      description: |
-        Returns report templates owned by the authenticated user.
-        Templates from other users are never returned.
-      operationId: listTemplates
-      parameters:
-        - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
-      responses:
-        '200':
-          description: Paginated list of templates
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TemplateList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-    post:
-      tags:
-        - Templates
-      summary: Create or update template
-      description: |
-        Creates a report template for the authenticated user. If a template already exists
-        for the same (user, modality, body_part, scan_protocol) combination, its
-        technique/findings/impression are **updated** (upsert behaviour).
-      operationId: createOrUpdateTemplate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TemplateCreate'
-            example:
-              modality: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              body_part: "7ab2c3d4-5678-4e9f-a012-bcdef0123456"
-              scan_protocol: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-              technique: "Standard protocol"
-              findings: "No abnormality detected."
-              impression: "Normal study."
-      responses:
-        '201':
-          description: Template created (or updated if one already existed)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/care_radiology/template/{id}/:
-    get:
-      tags:
-        - Templates
-      summary: Retrieve template
-      operationId: getTemplate
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Template detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-    delete:
-      tags:
-        - Templates
-      summary: Delete template
-      operationId: deleteTemplate
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      responses:
-        '200':
-          description: Template deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Template'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   # ---------- Webhooks ----------
   /api/care_radiology/webhooks/study/:
     post:
@@ -1052,17 +407,19 @@ paths:
         Webhook endpoint called by the DICOM worklist server when a study is completed
         or linked to a service request. Authenticated with static API key.
 
-        Two payload shapes are supported:
+        Three payload shapes are supported, tried in priority order:
 
-        **Shape A — service_request + study:**
-        Links the study to an existing CARE `ServiceRequest`. Looks up the service request
-        by `service_request_id`, creates or retrieves the `DicomStudy`, then creates/updates
-        a `RadiologyServiceRequest` record.
+        **Shape A — service_request_id + study_id:**
+        Links the study to an existing CARE `ServiceRequest` looked up by `service_request_id`
+        (external_id).
 
-        **Shape B — patient + study:**
+        **Shape B — accession_number + study_id:**
+        Links the study to a `ServiceRequest` looked up by `accession_number` stored in
+        `ServiceRequest.meta`.
+
+        **Shape C — patient_id + study_id:**
         Links the study directly to a patient identified by their instance identifier
-        (e.g. HIS patient ID stored in `instance_identifiers`). Creates/retrieves the
-        `DicomStudy` and returns the study record.
+        (e.g. HIS patient ID stored in `instance_identifiers`), without a service request link.
 
         All payloads are persisted to `RadiologyWebhookLogs` regardless of shape.
       operationId: webhookStudy
@@ -1080,8 +437,13 @@ paths:
                 value:
                   service_request_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
                   study_id: "1.2.840.10008.5.1.4.1.1.2.1234567890"
+              accession_number_study:
+                summary: Shape B — link study via accession number
+                value:
+                  accession_number: "ACJAYCTO26000004"
+                  study_id: "1.2.840.10008.5.1.4.1.1.2.1234567890"
               patient_study:
-                summary: Shape B — link study to patient
+                summary: Shape C — link study to patient
                 value:
                   patient_id: "PID-00123"
                   study_id: "1.2.840.10008.5.1.4.1.1.2.0987654321"
@@ -1115,6 +477,234 @@ paths:
                 no_patient:
                   value:
                     detail: "No matching patient"
+
+  /api/care_radiology/webhooks/status/:
+    post:
+      tags:
+        - Webhooks
+      summary: Receive MPPS status update
+      description: |
+        Webhook endpoint called by the DICOM worklist server with Modality Performed
+        Procedure Step (MPPS) status updates. Maps `study_status` to a facility
+        `TagConfig` entry and appends it to `ServiceRequest.tags` (duplicates are
+        skipped). Authenticated with static API key. All payloads are persisted to
+        `RadiologyWebhookLogs` with `type="MPPS"`.
+
+        `study_status` is expected to be one of `SCAN_STARTED`, `SCAN_COMPLETED`,
+        `DISCONTINUED` (an unrecognized value is still processed, just logged as a
+        warning) and must match a `TagConfig.display` value configured for the
+        service request's facility.
+      operationId: webhookStatus
+      security:
+        - StaticApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookStatusPayload'
+            example:
+              service_request_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              study_status: "SCAN_STARTED"
+      responses:
+        '200':
+          description: Tag updated successfully, or already present
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookStatusResponse'
+        '400':
+          description: Missing required fields, facility not found, or no matching tag configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "Tag configuration not found for status: SCAN_STARTED"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: ServiceRequest not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "Service request not found: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  # ---------- Observation Templates ----------
+  /api/care_radiology/observation_template/:
+    get:
+      tags:
+        - Observation Templates
+      summary: List observation templates
+      description: |
+        Returns observation templates for a facility. `facility` is required.
+        Optionally filter by `observation_definition`, `activity_definition`,
+        or `title` (case-insensitive contains).
+
+        Requires `can_read_radiology_report` permission for the facility.
+      operationId: listObservationTemplates
+      parameters:
+        - name: facility
+          in: query
+          required: true
+          description: Facility external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+        - name: observation_definition
+          in: query
+          description: Filter by ObservationDefinition external_id
+          schema:
+            type: string
+            format: uuid
+        - name: activity_definition
+          in: query
+          description: Filter by ActivityDefinition external_id
+          schema:
+            type: string
+            format: uuid
+        - name: title
+          in: query
+          description: Case-insensitive substring match on title
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Ordering'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated list of observation templates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationTemplateList'
+        '400':
+          description: facility query parameter is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                facility: "This value is required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags:
+        - Observation Templates
+      summary: Create observation template
+      description: |
+        Creates a new observation template for a facility, with a set of fields
+        (code/value/description) replacing any existing fields. `title` must be
+        unique per facility.
+
+        Requires `can_write_radiology_report` permission for the facility.
+      operationId: createObservationTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObservationTemplateCreate'
+            example:
+              facility: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              observation_definition: "9c0d11ee-aabb-44cc-aa11-bb22cc33dd44"
+              activity_definition: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              title: "Chest X-Ray Findings"
+              description: "Standard structured findings for chest X-Ray"
+              fields:
+                - code: "impression"
+                  value: null
+                  description: "Radiologist impression"
+      responses:
+        '201':
+          description: Observation template created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationTemplate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Conflict — a template with this title already exists for this facility
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                title: "A template with this title already exists for this facility"
+
+  /api/care_radiology/observation_template/{id}/:
+    get:
+      tags:
+        - Observation Templates
+      summary: Retrieve observation template
+      operationId: getObservationTemplate
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Observation template detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationTemplate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags:
+        - Observation Templates
+      summary: Update observation template
+      description: |
+        Partially updates `title` and/or `description` of an existing observation
+        template. Fields (code/value/description) cannot be changed via update.
+
+        Requires `can_write_radiology_report` permission for the facility.
+      operationId: updateObservationTemplate
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObservationTemplateUpdate'
+      responses:
+        '200':
+          description: Observation template updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationTemplate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict — a template with this title already exists for this facility
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                title: "A template with this title already exists for this facility"
 
 components:
   securitySchemes:
@@ -1163,26 +753,6 @@ components:
 
   schemas:
     # ===================== Shared =====================
-    Coding:
-      type: object
-      required:
-        - coding_system
-        - coding_code
-        - coding_display
-      properties:
-        coding_system:
-          type: string
-          description: Coding system URI
-          example: "http://dicom.nema.org/resources/ontology/DCM"
-        coding_code:
-          type: string
-          description: Code within the system
-          example: "CT"
-        coding_display:
-          type: string
-          description: Human-readable display
-          example: "Computed Tomography"
-
     LiteUser:
       type: object
       description: Minimal user representation used in created_by / updated_by fields
@@ -1216,216 +786,6 @@ components:
           format: uri
           nullable: true
           description: URL of the previous page
-
-    # ===================== Modality Type =====================
-    ModalityTypeCreate:
-      type: object
-      required:
-        - display_name
-        - coding
-      properties:
-        display_name:
-          type: string
-          description: Unique human-readable name for the modality (e.g. "CT", "MRI")
-          example: "CT"
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    ModalityTypeUpdate:
-      type: object
-      description: All fields optional; only supplied fields are updated.
-      properties:
-        display_name:
-          type: string
-          example: "MRI"
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    ModalityType:
-      allOf:
-        - $ref: '#/components/schemas/ModalityTypeCreate'
-        - type: object
-          required:
-            - external_id
-          properties:
-            external_id:
-              type: string
-              format: uuid
-              readOnly: true
-
-    ModalityTypeList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/ModalityType'
-
-    # ===================== Body Part =====================
-    BodyPartCreate:
-      type: object
-      required:
-        - modality
-        - display_name
-        - coding
-      properties:
-        modality:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        display_name:
-          type: string
-          example: "Chest"
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    BodyPartUpdate:
-      type: object
-      description: All fields optional; only supplied fields are updated.
-      properties:
-        modality:
-          type: string
-          format: uuid
-        display_name:
-          type: string
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    BodyPart:
-      type: object
-      required:
-        - external_id
-        - display_name
-        - modality_id
-        - modality
-      properties:
-        external_id:
-          type: string
-          format: uuid
-          readOnly: true
-        display_name:
-          type: string
-          example: "Chest"
-        modality_id:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        modality:
-          type: string
-          description: ModalityType display_name
-          example: "CT"
-        coding:
-          type: array
-          nullable: true
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    BodyPartList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/BodyPart'
-
-    # ===================== Scan Protocol =====================
-    ScanProtocolCreate:
-      type: object
-      required:
-        - modality
-        - body_part
-        - display_name
-        - coding
-      properties:
-        modality:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        body_part:
-          type: string
-          format: uuid
-          description: BodyPart external_id
-        display_name:
-          type: string
-          example: "CT Chest with Contrast"
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    ScanProtocolUpdate:
-      type: object
-      description: All fields optional; only supplied fields are updated.
-      properties:
-        modality:
-          type: string
-          format: uuid
-        body_part:
-          type: string
-          format: uuid
-        display_name:
-          type: string
-        coding:
-          type: array
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    ScanProtocol:
-      type: object
-      required:
-        - external_id
-        - display_name
-        - modality_id
-        - modality
-        - body_part_id
-        - body_part
-      properties:
-        external_id:
-          type: string
-          format: uuid
-          readOnly: true
-        display_name:
-          type: string
-          example: "CT Chest with Contrast"
-        modality_id:
-          type: string
-          format: uuid
-        modality:
-          type: string
-          example: "CT"
-        body_part_id:
-          type: string
-          format: uuid
-        body_part:
-          type: string
-          example: "Chest"
-        coding:
-          type: array
-          nullable: true
-          items:
-            $ref: '#/components/schemas/Coding'
-
-    ScanProtocolList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/ScanProtocol'
 
     # ===================== DICOM Studies =====================
     DicomSeries:
@@ -1487,9 +847,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
-        has_report:
-          type: boolean
-          description: Whether a StudyReport exists in CARE for this study
 
     EncounterDetail:
       type: object
@@ -1877,346 +1234,28 @@ components:
               type: integer
               nullable: true
 
-    # ===================== Study Report =====================
-    StudyReportCreate:
-      type: object
-      required:
-        - study
-        - modality
-        - body_part
-        - scan_protocol
-      properties:
-        study:
-          type: string
-          format: uuid
-          description: DicomStudy external_id
-        modality:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        body_part:
-          type: string
-          format: uuid
-          description: BodyPart external_id
-        scan_protocol:
-          type: string
-          format: uuid
-          description: ScanProtocol external_id
-        technique:
-          type: string
-          nullable: true
-          description: Imaging technique description
-          example: "Axial sections with 5mm slice thickness"
-        findings:
-          type: string
-          nullable: true
-          description: Radiologist findings
-          example: "No acute cardiopulmonary process identified."
-        impression:
-          type: string
-          nullable: true
-          description: Radiologist impression / conclusion
-          example: "Normal chest radiograph."
-
-    StudyReportUpdate:
-      type: object
-      description: All fields optional; only supplied fields are updated.
-      properties:
-        modality:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        body_part:
-          type: string
-          format: uuid
-          description: BodyPart external_id
-        scan_protocol:
-          type: string
-          format: uuid
-          description: ScanProtocol external_id
-        technique:
-          type: string
-          nullable: true
-          example: "Axial sections with 5mm slice thickness"
-        findings:
-          type: string
-          nullable: true
-          example: "Small pleural effusion on the right."
-        impression:
-          type: string
-          nullable: true
-          example: "Pleural effusion, right side."
-
-    StudyReport:
-      type: object
-      required:
-        - external_id
-        - study_id
-        - patient_id
-        - modality_id
-        - body_part_id
-        - scan_protocol_id
-        - modality
-        - body_part
-        - scan_protocol
-      properties:
-        external_id:
-          type: string
-          format: uuid
-          readOnly: true
-        study_id:
-          type: string
-          format: uuid
-          description: DicomStudy external_id
-        patient_id:
-          type: string
-          format: uuid
-          description: Patient external_id (denormalized from DicomStudy)
-        patient:
-          type: object
-          nullable: true
-          description: Nested PatientListSpec object
-        study:
-          type: string
-          nullable: true
-          description: study_name field on DicomStudy (may be null if not set)
-        modality_id:
-          type: string
-          format: uuid
-        body_part_id:
-          type: string
-          format: uuid
-        scan_protocol_id:
-          type: string
-          format: uuid
-        modality:
-          type: string
-          example: "CT"
-        body_part:
-          type: string
-          example: "Chest"
-        scan_protocol:
-          type: string
-          example: "CT Chest with Contrast"
-        technique:
-          type: string
-          nullable: true
-        findings:
-          type: string
-          nullable: true
-        impression:
-          type: string
-          nullable: true
-        created_datetime:
-          type: string
-          format: date-time
-          nullable: true
-          readOnly: true
-        last_modified_datetime:
-          type: string
-          format: date-time
-          nullable: true
-          readOnly: true
-        created_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-          readOnly: true
-        updated_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-          readOnly: true
-
-    StudyReportList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/StudyReport'
-
-    # ===================== Study Report Audit =====================
-    StudyReportAudit:
-      type: object
-      description: |
-        Immutable audit record created automatically when a study report is created or updated.
-        `action` is "Created" or "Updated". `field_name` is "All" on creation and "Multiple"
-        when several fields change at once. `old_value` / `new_value` are JSON objects keyed
-        by human-readable field names (e.g. "Findings", "Impression").
-      required:
-        - external_id
-        - study_report_id
-        - action
-        - field_name
-      properties:
-        external_id:
-          type: string
-          format: uuid
-          readOnly: true
-        study_report_id:
-          type: string
-          format: uuid
-          description: StudyReport external_id
-        action:
-          type: string
-          enum: [Created, Updated]
-          example: "Updated"
-        field_name:
-          type: string
-          description: '"All" on creation, "Multiple" when several fields changed'
-          example: "Multiple"
-        old_value:
-          type: object
-          nullable: true
-          description: |
-            JSON object mapping field name → previous value.
-            Null on creation.
-          example:
-            Findings: "No abnormality."
-            Impression: "Normal."
-        new_value:
-          type: object
-          nullable: true
-          description: JSON object mapping field name → new value.
-          example:
-            Findings: "Small pleural effusion on the right."
-            Impression: "Pleural effusion, right side."
-        created_datetime:
-          type: string
-          format: date-time
-          nullable: true
-          readOnly: true
-        last_modified_datetime:
-          type: string
-          format: date-time
-          nullable: true
-          readOnly: true
-        created_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-          readOnly: true
-        updated_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-          readOnly: true
-
-    StudyReportAuditList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/StudyReportAudit'
-
-    # ===================== Template =====================
-    TemplateCreate:
-      type: object
-      required:
-        - modality
-        - body_part
-        - scan_protocol
-      properties:
-        modality:
-          type: string
-          format: uuid
-          description: ModalityType external_id
-        body_part:
-          type: string
-          format: uuid
-          description: BodyPart external_id
-        scan_protocol:
-          type: string
-          format: uuid
-          description: ScanProtocol external_id
-        technique:
-          type: string
-          nullable: true
-          example: "Standard protocol"
-        findings:
-          type: string
-          nullable: true
-          example: "No abnormality detected."
-        impression:
-          type: string
-          nullable: true
-          example: "Normal study."
-
-    Template:
-      type: object
-      required:
-        - external_id
-        - modality_id
-        - body_part_id
-        - scan_protocol_id
-        - modality
-        - body_part
-        - scan_protocol
-      properties:
-        external_id:
-          type: string
-          format: uuid
-          readOnly: true
-        modality_id:
-          type: string
-          format: uuid
-        body_part_id:
-          type: string
-          format: uuid
-        scan_protocol_id:
-          type: string
-          format: uuid
-        modality:
-          type: string
-          example: "CT"
-        body_part:
-          type: string
-          example: "Chest"
-        scan_protocol:
-          type: string
-          example: "CT Chest with Contrast"
-        technique:
-          type: string
-          nullable: true
-        findings:
-          type: string
-          nullable: true
-        impression:
-          type: string
-          nullable: true
-
-    TemplateList:
-      allOf:
-        - $ref: '#/components/schemas/PaginatedMeta'
-        - type: object
-          properties:
-            results:
-              type: array
-              items:
-                $ref: '#/components/schemas/Template'
-
     # ===================== Webhooks =====================
     WebhookStudyPayload:
       type: object
       description: |
-        Either (service_request_id + study_id) or (patient_id + study_id) must be present.
+        One of (service_request_id + study_id), (accession_number + study_id), or
+        (patient_id + study_id) must be present.
         Additional fields in the payload are stored verbatim in RadiologyWebhookLogs.
       properties:
         service_request_id:
           type: string
           format: uuid
           description: CARE ServiceRequest external_id (Shape A)
+        accession_number:
+          type: string
+          description: Accession number stored in ServiceRequest.meta.accession_number (Shape B)
+          example: "ACJAYCTO26000004"
         patient_id:
           type: string
           description: |
             Patient identifier as stored in Patient.instance_identifiers
-            (e.g. HIS patient ID). Used for Shape B when no service_request_id is provided.
+            (e.g. HIS patient ID). Used for Shape C when no service_request_id or
+            accession_number is provided.
           example: "PID-00123"
         study_id:
           type: string
@@ -2238,10 +1277,160 @@ components:
               type: string
               format: uuid
               description: |
-                RadiologyServiceRequest external_id (Shape A) or DicomStudy external_id (Shape B)
+                RadiologyServiceRequest external_id (Shape A/B) or DicomStudy external_id (Shape C)
             data:
               type: object
               description: Raw payload that was stored
+
+    WebhookStatusPayload:
+      type: object
+      required:
+        - service_request_id
+        - study_status
+      properties:
+        service_request_id:
+          type: string
+          format: uuid
+          description: CARE ServiceRequest external_id
+        study_status:
+          type: string
+          description: |
+            MPPS status value. Expected to be one of SCAN_STARTED, SCAN_COMPLETED,
+            DISCONTINUED, but other values are still processed (with a warning logged),
+            as long as a matching facility TagConfig.display exists.
+          example: "SCAN_STARTED"
+
+    WebhookStatusResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "MPPS status tag updated successfully"
+        service_request_id:
+          type: string
+          format: uuid
+        study_status:
+          type: string
+        tag_id:
+          type: integer
+          description: Internal TagConfig id (matches an entry in ServiceRequest.tags)
+        tag_uuid:
+          type: string
+          format: uuid
+          description: TagConfig external_id
+        current_tags:
+          type: array
+          items:
+            type: integer
+          description: Full tags array on the ServiceRequest after this update
+
+    # ===================== Observation Template =====================
+    ObservationTemplateField:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: Observation component code
+        value:
+          type: string
+          nullable: true
+          description: Default/placeholder value for this field
+        description:
+          type: string
+          nullable: true
+
+    ObservationTemplateCreate:
+      type: object
+      required:
+        - facility
+        - observation_definition
+        - title
+        - fields
+      properties:
+        facility:
+          type: string
+          format: uuid
+          description: Facility external_id
+        observation_definition:
+          type: string
+          format: uuid
+          description: ObservationDefinition external_id
+        activity_definition:
+          type: string
+          format: uuid
+          nullable: true
+          description: ActivityDefinition external_id
+        title:
+          type: string
+          description: Unique per facility
+          example: "Chest X-Ray Findings"
+        description:
+          type: string
+          nullable: true
+        fields:
+          type: array
+          minItems: 1
+          description: At least one field is required; replaces all existing fields on create
+          items:
+            $ref: '#/components/schemas/ObservationTemplateField'
+
+    ObservationTemplateUpdate:
+      type: object
+      description: All fields optional; only supplied fields are updated. `fields` cannot be changed via update.
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+
+    ObservationTemplate:
+      type: object
+      required:
+        - id
+        - facility
+        - observation_definition
+        - title
+        - fields
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        facility:
+          type: string
+          format: uuid
+          description: Facility external_id
+        observation_definition:
+          type: string
+          format: uuid
+          description: ObservationDefinition external_id
+        activity_definition:
+          type: string
+          format: uuid
+          nullable: true
+          description: ActivityDefinition external_id
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ObservationTemplateField'
+
+    ObservationTemplateList:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedMeta'
+        - type: object
+          properties:
+            results:
+              type: array
+              items:
+                $ref: '#/components/schemas/ObservationTemplate'
 
     # ===================== Error =====================
     Error:
@@ -2256,7 +1445,7 @@ components:
           nullable: true
           description: Field-level validation errors
           example:
-            study: ["This field is required"]
+            title: ["This field is required"]
 
   responses:
     BadRequest:
