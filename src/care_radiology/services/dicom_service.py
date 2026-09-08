@@ -40,14 +40,27 @@ def upload_dicom_file(patient, dcm_file):
 
     try:
         body, content_type = encode_file_multipart_related(dcm_file)
-        upload_response = requests.post(
-            url=f"{DCM4CHEE_BASEURL}/rs/studies",
-            data=body,
-            headers={
-                "Content-Type": content_type,
-                "Accept": "application/dicom+json",
-            },
-        )
+
+        # Upload to DCM4CHE with timeout handling specific to POST request
+        try:
+            upload_response = requests.post(
+                url=f"{DCM4CHEE_BASEURL}/rs/studies",
+                data=body,
+                headers={
+                    "Content-Type": content_type,
+                    "Accept": "application/dicom+json",
+                },
+                timeout=(
+                    plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
+                    plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT,
+                ),
+            )
+        except requests.Timeout as e:
+            raise DicomUploadError(
+                "DCM4CHE upload timeout",
+                status_code=504,
+                extra={"details": str(e)},
+            )
 
         if upload_response.status_code not in [200, 201]:
             raise DicomUploadError(
@@ -64,9 +77,16 @@ def upload_dicom_file(patient, dcm_file):
             referenced_sop, DICOM_TAG.ReferencedInstanceUID.value
         )[0]
 
-        study_uid = d_find(
-            d_query_instance(instance_uid), DICOM_TAG.StudyInstanceUID.value
-        )[0]
+        # Query for study UID (upload already succeeded at this point)
+        instance_data = d_query_instance(instance_uid)
+        if instance_data is None:
+            raise DicomUploadError(
+                "Upload succeeded but failed to query study metadata from DCM4CHE",
+                status_code=500,
+                extra={"instance_uid": instance_uid},
+            )
+
+        study_uid = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)[0]
 
         (dicom_study, _) = DicomStudy.objects.update_or_create(
             dicom_study_uid=study_uid,
@@ -78,9 +98,19 @@ def upload_dicom_file(patient, dcm_file):
         key = f"radiology:dicom:study:{study_uid}"
         cache.delete(key)
 
+        # Fetch study details (upload and DB record already created at this point)
+        study_details = fetch_study(dicom_study)
+        if study_details is None:
+            # Upload succeeded, DB record created, but couldn't fetch full details
+            raise DicomUploadError(
+                "Upload succeeded but failed to fetch complete study details from DCM4CHE",
+                status_code=500,
+                extra={"study_uid": study_uid},
+            )
+
         return {
             "study_uid": study_uid,
-            "study": fetch_study(dicom_study),
+            "study": study_details,
         }
 
     except DicomUploadError:
