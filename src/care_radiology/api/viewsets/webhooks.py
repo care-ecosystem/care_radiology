@@ -1,19 +1,19 @@
 import logging
 
-from rest_framework.viewsets import ViewSet
-from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework import status
-
-from rest_framework.exceptions import AuthenticationFailed, ParseError
-
-
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
+from rest_framework import status
+from rest_framework.decorators import action
+from rest_framework.exceptions import ParseError
+from rest_framework.response import Response
+from rest_framework.viewsets import ViewSet
+
 from care_radiology.constants import VALID_MPPS_STATUSES
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
-from care_radiology.security.authentication import StaticAPIKeyAuthentication
+from care_radiology.security.authentication import (
+    StaticAPIKeyAuthentication,
+    StaticAPIKeyAuthorization,
+)
 from care_radiology.services.dicom_service import (
     WebhookConflictError,
     process_study_webhook,
@@ -27,7 +27,8 @@ class WebhookViewSet(ViewSet):
         detail=False,
         methods=["post"],
         url_path="study",
-        permission_classes=[AllowAny],
+        authentication_classes=[StaticAPIKeyAuthentication],
+        permission_classes=[StaticAPIKeyAuthorization],
     )
     def save_webhook(self, request):
         """
@@ -73,11 +74,6 @@ class WebhookViewSet(ViewSet):
             401: Invalid API key
             409: Service request or patient not found (conflict)
         """
-        authenticator = StaticAPIKeyAuthentication()
-        user_auth_tuple = authenticator.authenticate(request)
-        if user_auth_tuple is None:
-            raise AuthenticationFailed("Invalid API key")
-
         try:
             data = request.data
         except ParseError:
@@ -117,12 +113,12 @@ class WebhookViewSet(ViewSet):
             status=status.HTTP_200_OK,
         )
 
-
     @action(
         detail=False,
         methods=["post"],
         url_path="status",
-        permission_classes=[AllowAny], # Need to add throttling & limit based on expected volume
+        authentication_classes=[StaticAPIKeyAuthentication],
+        permission_classes=[StaticAPIKeyAuthorization],  # Need to add throttling & limit based on expected volume
     )
     def handle_mpps(self, request):
         """
@@ -153,11 +149,6 @@ class WebhookViewSet(ViewSet):
             500: Database error
         """
         logger.info("[MPPS] Webhook received!")
-        authenticator = StaticAPIKeyAuthentication()
-        user_auth_tuple = authenticator.authenticate(request)
-        if user_auth_tuple is None:
-            raise AuthenticationFailed("Invalid API key")
-
         try:
             data = request.data
             logger.info(f"[MPPS] Received data: {data}")
@@ -170,16 +161,12 @@ class WebhookViewSet(ViewSet):
 
         service_request_id = data.get("service_request_id")
         study_status = data.get("study_status")
-        logger.info(
-            f"[MPPS] Extracted - SR: {service_request_id}, Status: {study_status}"
-        )
+        logger.info(f"[MPPS] Extracted - SR: {service_request_id}, Status: {study_status}")
 
         if not service_request_id or not study_status:
             logger.error("[MPPS] Missing required fields")
             return Response(
-                {
-                    "detail": "Missing required fields: service_request_id, study_status"
-                },
+                {"detail": "Missing required fields: service_request_id, study_status"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -194,9 +181,7 @@ class WebhookViewSet(ViewSet):
             sr = ServiceRequest.objects.get(external_id=service_request_id)
             logger.info(f"[MPPS] ServiceRequest found: {sr.id}")
         except ServiceRequest.DoesNotExist:
-            logger.error(
-                f"[MPPS] ServiceRequest not found: {service_request_id}"
-            )
+            logger.error(f"[MPPS] ServiceRequest not found: {service_request_id}")
             return Response(
                 {"detail": f"Service request not found: {service_request_id}"},
                 status=status.HTTP_404_NOT_FOUND,
@@ -212,16 +197,12 @@ class WebhookViewSet(ViewSet):
 
         logger.info(f"[MPPS] Facility found: {facility.external_id}")
         try:
-            tag_config = TagConfig.objects.filter(
-                facility=facility, display=study_status
-            ).first()
+            tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
 
             if not tag_config:
                 logger.error(f"[MPPS] Tag not found for status: {study_status}")
                 return Response(
-                    {
-                        "detail": f"Tag configuration not found for status: {study_status}"
-                    },
+                    {"detail": f"Tag configuration not found for status: {study_status}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -235,14 +216,12 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        try:    
+        try:
             tags = sr.tags or []
             logger.info(f"[MPPS] Current tags before update: {tags}")
 
             if tag_id in tags:
-                logger.warning(
-                    f"[MPPS] Tag {tag_id} already exists in SR {service_request_id}, skipping duplicate"
-                )
+                logger.warning(f"[MPPS] Tag {tag_id} already exists in SR {service_request_id}, skipping duplicate")
                 return Response(
                     {
                         "detail": "Tag already set for this service request",
