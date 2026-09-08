@@ -11,14 +11,13 @@ from rest_framework.exceptions import AuthenticationFailed, ParseError
 
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
+from care_radiology.constants import VALID_MPPS_STATUSES
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.security.authentication import StaticAPIKeyAuthentication
 from care_radiology.services.dicom_service import (
     WebhookConflictError,
     process_study_webhook,
 )
-
-VALID_MPPS_STATUSES = ["SCAN_STARTED", "SCAN_COMPLETED", "DISCONTINUED"]
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,6 @@ class WebhookViewSet(ViewSet):
             401: Invalid API key
             409: Service request or patient not found (conflict)
         """
-        # Manually authenticate
         authenticator = StaticAPIKeyAuthentication()
         user_auth_tuple = authenticator.authenticate(request)
         if user_auth_tuple is None:
@@ -155,13 +153,11 @@ class WebhookViewSet(ViewSet):
             500: Database error
         """
         logger.info("[MPPS] Webhook received!")
-        # Step 1: Authenticate
         authenticator = StaticAPIKeyAuthentication()
         user_auth_tuple = authenticator.authenticate(request)
         if user_auth_tuple is None:
             raise AuthenticationFailed("Invalid API key")
 
-        # Step 2: Parse webhook data
         try:
             data = request.data
             logger.info(f"[MPPS] Received data: {data}")
@@ -172,14 +168,12 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Step 3: Extract fields
         service_request_id = data.get("service_request_id")
         study_status = data.get("study_status")
         logger.info(
             f"[MPPS] Extracted - SR: {service_request_id}, Status: {study_status}"
         )
 
-        # Step 4: Validate required fields
         if not service_request_id or not study_status:
             logger.error("[MPPS] Missing required fields")
             return Response(
@@ -189,16 +183,13 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Step 5: Validate study_status value
         if study_status not in VALID_MPPS_STATUSES:
             logger.warning(f"[MPPS] Unexpected status: {study_status}")
             # Still process it, but log warning
 
-        # Log the webhook
         RadiologyWebhookLogs.objects.create(raw_data=data, type="MPPS")
         logger.info("[MPPS] Webhook logged to database")
 
-        # Step 6: Get ServiceRequest from CARE
         try:
             sr = ServiceRequest.objects.get(external_id=service_request_id)
             logger.info(f"[MPPS] ServiceRequest found: {sr.id}")
@@ -211,7 +202,6 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Step 7: Get facility from ServiceRequest
         facility = sr.facility
         if not facility:
             logger.error("[MPPS] Facility not found for SR")
@@ -221,10 +211,9 @@ class WebhookViewSet(ViewSet):
             )
 
         logger.info(f"[MPPS] Facility found: {facility.external_id}")
-        # Step 8: Get TagConfig for MPPS status
         try:
             tag_config = TagConfig.objects.filter(
-                facility=facility, display=study_status  # e.g., "STARTED"
+                facility=facility, display=study_status
             ).first()
 
             if not tag_config:
@@ -246,7 +235,6 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Step 9: Update ServiceRequest tags directly via Django ORM
         try:    
             tags = sr.tags or []
             logger.info(f"[MPPS] Current tags before update: {tags}")
@@ -279,7 +267,6 @@ class WebhookViewSet(ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Step 10: Return success
         logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
         return Response(
             {

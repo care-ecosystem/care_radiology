@@ -3,6 +3,7 @@ import requests
 from django.core.cache import cache
 
 from care.emr.models.service_request import ServiceRequest
+from care_radiology.constants import DCM4CHEE_BASEURL, DICOM_STUDY_CACHE_KEY_TEMPLATE
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.utils.dicom import (
@@ -15,9 +16,6 @@ from care_radiology.utils.dicom import (
     encode_file_multipart_related,
 )
 from care_radiology.settings import plugin_settings
-
-
-DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
 
 class DicomUploadError(Exception):
@@ -41,7 +39,6 @@ def upload_dicom_file(patient, dcm_file):
     try:
         body, content_type = encode_file_multipart_related(dcm_file)
 
-        # Upload to DCM4CHE with timeout handling specific to POST request
         try:
             upload_response = requests.post(
                 url=f"{DCM4CHEE_BASEURL}/rs/studies",
@@ -77,7 +74,6 @@ def upload_dicom_file(patient, dcm_file):
             referenced_sop, DICOM_TAG.ReferencedInstanceUID.value
         )[0]
 
-        # Query for study UID (upload already succeeded at this point)
         instance_data = d_query_instance(instance_uid)
         if instance_data is None:
             raise DicomUploadError(
@@ -94,14 +90,11 @@ def upload_dicom_file(patient, dcm_file):
             defaults={},
         )
 
-        # Bust the study from cache
-        key = f"radiology:dicom:study:{study_uid}"
+        key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
         cache.delete(key)
 
-        # Fetch study details (upload and DB record already created at this point)
         study_details = fetch_study(dicom_study)
         if study_details is None:
-            # Upload succeeded, DB record created, but couldn't fetch full details
             raise DicomUploadError(
                 "Upload succeeded but failed to fetch complete study details from DCM4CHE",
                 status_code=500,
@@ -184,7 +177,7 @@ def fetch_study(dicom_study):
         return values[0] if values else None
 
     study_uid = dicom_study.dicom_study_uid
-    key = f"radiology:dicom:study:{study_uid}"
+    key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
     cached = cache.get(key)
     if cached:
         return cached

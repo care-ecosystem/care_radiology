@@ -1,6 +1,5 @@
 import logging
 
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.db.models import Q
@@ -31,6 +30,8 @@ from care_radiology.services.dicom_service import (
     link_service_request_to_study,
     upload_dicom_file,
 )
+from care_radiology.utils.dicom import parse_date
+from care_radiology.utils.patient import get_patient_uhid
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,6 @@ class DicomViewSet(ViewSet):
         permission_classes = [AllowAny]
     )
     def worklist(self, request):
-        # Manually authenticate
         authenticator = StaticAPIKeyAuthentication()
         user_auth_tuple = authenticator.authenticate(request)
         if user_auth_tuple is None:
@@ -65,7 +65,7 @@ class DicomViewSet(ViewSet):
             modality=modality,
             from_date=from_date,
             to_date=to_date,
-            limit=1000,  # optional, default is 1000
+            limit=1000,
         )
 
         return Response(data={
@@ -73,7 +73,6 @@ class DicomViewSet(ViewSet):
             "results": results
         }, status=200)
 
-    # DCM Files upload
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
         patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
@@ -150,7 +149,6 @@ class DicomViewSet(ViewSet):
             status=200,
         )
 
-    # Get list of studies
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
         patient_external_id = request.query_params.get("patientId")
@@ -326,52 +324,3 @@ def get_service_requests(
         )
 
     return results
-
-
-# Date utils ------------------------------------------------------------------
-def parse_date(date_str):
-    if not date_str:
-        return None
-    try:
-        # Try full datetime first
-        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        # Fallback to date-only if time not provided
-        return datetime.strptime(date_str, "%Y-%m-%d")
-
-
-def get_patient_uhid(patient):
-    from care.emr.models.patient import PatientIdentifierConfigCache
-
-    identifiers = patient.instance_identifiers
-    if not isinstance(identifiers, list):
-        return None
-
-    for identifier in identifiers:
-        if not isinstance(identifier, dict):
-            continue
-
-        config_external_id = identifier.get("config")
-        if not config_external_id:
-            continue
-
-        try:
-            config = PatientIdentifierConfigCache.get_config(config_external_id)
-        except Exception:
-            logger.warning(
-                "Failed to resolve patient identifier config %s",
-                config_external_id,
-                exc_info=True,
-            )
-            continue
-
-        nested = config.get("config") if isinstance(config, dict) else None
-        if not isinstance(nested, dict):
-            continue
-
-        display = nested.get("display")
-
-        if isinstance(display, str) and display.lower() == "uhid":
-            return identifier.get("value")
-
-    return None
