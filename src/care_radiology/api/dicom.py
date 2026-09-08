@@ -4,14 +4,11 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.db.models import Q
-from django.contrib.auth.models import AnonymousUser
 
 from care.emr.models.device import Device
 from care.emr.models.encounter import Encounter
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
-from rest_framework.authentication import BaseAuthentication
-from rest_framework.permissions import BasePermission
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
@@ -24,29 +21,19 @@ from care.emr.resources.encounter.spec import EncounterRetrieveSpec
 from care.emr.resources.service_request.spec import ServiceRequestReadSpec
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
+from care_radiology.security.authentication import (
+    StaticAPIKeyAuthentication,
+    StaticAPIKeyAuthorization,
+)
 from care_radiology.services.dicom_service import (
     DicomUploadError,
     fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
 )
-from care_radiology.settings import plugin_settings
 
 
-STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
 logger = logging.getLogger(__name__)
-
-class StaticAPIKeyAuthentication(BaseAuthentication):
-    def authenticate(self, request):
-        api_key = request.headers.get("Authorization")
-        if api_key == STATIC_API_KEY:
-            return (AnonymousUser(), None)
-        raise AuthenticationFailed("Invalid API key")
-
-class StaticAPIKeyAuthorization(BasePermission):
-    def has_permission(self, request, view):
-        api_key = request.headers.get("Authorization")
-        return api_key == STATIC_API_KEY
 
 
 class DicomViewSet(ViewSet):

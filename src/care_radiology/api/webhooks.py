@@ -1,38 +1,26 @@
 import logging
 
-from django.contrib.auth.models import AnonymousUser
-
 from rest_framework.viewsets import ViewSet
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 
-from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed, ParseError
 
 
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
+from care_radiology.security.authentication import StaticAPIKeyAuthentication
 from care_radiology.services.dicom_service import (
     WebhookConflictError,
     process_study_webhook,
 )
-from care_radiology.settings import plugin_settings
 
-STATIC_API_KEY = plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET
 VALID_MPPS_STATUSES = ["SCAN_STARTED", "SCAN_COMPLETED", "DISCONTINUED"]
 
 logger = logging.getLogger(__name__)
-
-
-class StaticAPIKeyAuthentication(BaseAuthentication):
-    def authenticate(self, request):
-        api_key = request.headers.get("Authorization")
-        if api_key == STATIC_API_KEY:
-            return (AnonymousUser(), None)
-        raise AuthenticationFailed("Invalid API key")
 
 
 class WebhookViewSet(ViewSet):
