@@ -1,11 +1,9 @@
 import requests
 
 from django.core.cache import cache
-from django.db.models import OuterRef, Exists
 
 from care.emr.models.service_request import ServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.study_report import StudyReport
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.utils.dicom import (
     DICOM_TAG,
@@ -90,19 +88,11 @@ def upload_dicom_file(patient, dcm_file):
 
         study_uid = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)[0]
 
-        studies_qs = DicomStudy.objects.annotate(
-            has_report=Exists(
-                StudyReport.objects.filter(study=OuterRef('pk'))
-            )
-        )
-
         (dicom_study, _) = DicomStudy.objects.update_or_create(
             dicom_study_uid=study_uid,
             patient=patient,
             defaults={},
         )
-
-        dicom_study = studies_qs.get(pk=dicom_study.pk)
 
         # Bust the study from cache
         key = f"radiology:dicom:study:{study_uid}"
@@ -197,7 +187,6 @@ def fetch_study(dicom_study):
     key = f"radiology:dicom:study:{study_uid}"
     cached = cache.get(key)
     if cached:
-        cached["has_report"] = dicom_study.has_report
         return cached
 
     study = d_query_study(study_uid)
@@ -241,7 +230,6 @@ def fetch_study(dicom_study):
         "study_modalities": d_find(study, DICOM_TAG.StudyModalities.value),
         "study_series": series,
         "external_id": dicom_study.external_id,
-        "has_report": dicom_study.has_report,
     }
 
     cache.set(key, cachable, timeout=60 * 60)

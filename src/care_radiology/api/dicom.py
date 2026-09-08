@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from django.db.models import Q, OuterRef, Exists
+from django.db.models import Q
 from django.contrib.auth.models import AnonymousUser
 
 from care.emr.models.device import Device
@@ -23,7 +23,6 @@ from care.emr.resources.encounter.spec import EncounterRetrieveSpec
 from care.emr.resources.service_request.spec import ServiceRequestReadSpec
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.study_report import StudyReport
 from care_radiology.services.dicom_service import (
     DicomUploadError,
     fetch_study,
@@ -171,8 +170,7 @@ class DicomViewSet(ViewSet):
         if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
             raise PermissionDenied(f"You do not have permission to view this patient")
 
-        report_exists = StudyReport.objects.filter(study=OuterRef('pk'))
-        studies = DicomStudy.objects.filter(patient__external_id=patient_external_id).annotate(has_report=Exists(report_exists))
+        studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -199,15 +197,10 @@ class DicomViewSet(ViewSet):
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
             raise PermissionDenied(f"You do not have permission to view this service request")
 
-        report_exists = StudyReport.objects.filter(study=OuterRef("dicom_study__pk"))
         tsr = RadiologyServiceRequest.objects.filter(
             service_request__external_id=service_request_external_id,
             dicom_study__dicom_study_uid__isnull=False,
-        ).annotate(has_report=Exists(report_exists)).select_related("dicom_study")
-
-        for r in tsr:
-            r.dicom_study.has_report = r.has_report
-
+        ).select_related("dicom_study")
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:

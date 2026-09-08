@@ -1,4 +1,3 @@
-# from celery import current_app
 from celery.schedules import schedule
 from config.celery_app import app
 from care_radiology.tasks.sync_dicom_studies import sync_dicom_studies
