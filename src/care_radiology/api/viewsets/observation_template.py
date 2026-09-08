@@ -14,7 +14,7 @@ from care.facility.models import Facility
 from care.security.authorization import AuthorizationController
 
 from care_radiology.models.observation_template import ObservationTemplate
-from care_radiology.resources.observation_template.spec import (
+from care_radiology.api.specs.observation_template import (
     ObservationTemplateCreateSpec,
     ObservationTemplateReadSpec,
     ObservationTemplateUpdateSpec,

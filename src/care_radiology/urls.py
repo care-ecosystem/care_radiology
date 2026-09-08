@@ -3,9 +3,9 @@ from django.shortcuts import HttpResponse
 from django.urls import path
 from rest_framework.routers import DefaultRouter, SimpleRouter
 
-from care_radiology.api.dicom import DicomViewSet
-from care_radiology.api.webhooks import WebhookViewSet
-from care_radiology.api.observation_template import ObservationTemplateViewSet
+from care_radiology.api.viewsets.dicom import DicomViewSet
+from care_radiology.api.viewsets.webhooks import WebhookViewSet
+from care_radiology.api.viewsets.observation_template import ObservationTemplateViewSet
 
 
 def healthy(request):

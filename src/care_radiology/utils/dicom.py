@@ -3,9 +3,8 @@ import requests
 from enum import Enum
 from datetime import datetime
 
+from care_radiology.constants import DCM4CHEE_BASEURL
 from care_radiology.settings import plugin_settings
-
-DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
 
 def get_pacs_query_timeout():
@@ -17,7 +16,6 @@ def get_pacs_query_timeout():
 
 
 class DICOM_TAG(Enum):
-    # Study Tags
     StudyInstanceUID = "0020000D"
     StudyModalities = "00080061"
     StudyDescription = "00081030"
@@ -25,14 +23,12 @@ class DICOM_TAG(Enum):
     StudyTime = "00080030"
     AccessionNumber = "00080050"
 
-    # Series Tags
     SeriesInstanceUID = "0020000E"
     SeriesModality = "00080060"
     SeriesNumber = "00200011"
     NumberOfSeriesRelatedInstances = "00201209"
     SeriesDescription = "0008103E"
 
-    # Instance Tags
     SOPInstanceUID = "00080018"
     ReferencedInstanceUID = "00081155"
 
@@ -202,7 +198,6 @@ def d_datetime_to_iso(da, tm=None):
     if not da:
         return None
 
-    # Parse date
     year = int(da[0:4])
     month = int(da[4:6])
     day = int(da[6:8])
@@ -225,19 +220,15 @@ def d_datetime_to_iso(da, tm=None):
 
     return dt.isoformat()
 
-# Date utils ------------------------------------------------------------------
 def parse_date(date_str):
     if not date_str:
         return None
     try:
-        # Try full datetime first
         return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
     except ValueError:
-        # Fallback to date-only if time not provided
         return datetime.strptime(date_str, "%Y-%m-%d")
 
 
-# Multipart Related Encoder ---------------------------------------------------
 def encode_file_multipart_related(file_obj):
     import uuid
 
