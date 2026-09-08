@@ -7,6 +7,15 @@ from care_radiology.settings import plugin_settings
 
 DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
+
+def get_pacs_query_timeout():
+    """Returns (connect_timeout, read_timeout) tuple for QIDO-RS queries"""
+    return (
+        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
+        plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT,
+    )
+
+
 class DICOM_TAG(Enum):
     # Study Tags
     StudyInstanceUID = "0020000D"
@@ -89,6 +98,7 @@ def d_query_instance(instance_id):
             "Accept": "application/json",
         },
         params={"SOPInstanceUID": instance_id},
+        timeout=get_pacs_query_timeout(),
     )
 
     if not response.ok:
@@ -111,6 +121,7 @@ def d_query_series_for_study(study_id):
         headers={
             "Accept": "application/json",
         },
+        timeout=get_pacs_query_timeout(),
     )
 
     if not response.ok:
@@ -142,6 +153,7 @@ def d_query_study(study_uid):
                 DICOM_TAG.StudyTime.value,
             ]),
         },
+        timeout=get_pacs_query_timeout(),
     )
 
     if not response.ok:

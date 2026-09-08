@@ -49,6 +49,10 @@ def upload_dicom_file(patient, dcm_file):
                 "Content-Type": content_type,
                 "Accept": "application/dicom+json",
             },
+            timeout=(
+                plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
+                plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT,
+            ),
         )
 
         if upload_response.status_code not in [200, 201]:
@@ -93,6 +97,12 @@ def upload_dicom_file(patient, dcm_file):
             "study": fetch_study(dicom_study),
         }
 
+    except requests.Timeout as e:
+        raise DicomUploadError(
+            "DCM4CHE upload timeout",
+            status_code=504,
+            extra={"details": str(e)},
+        )
     except DicomUploadError:
         raise
     except Exception as e:
