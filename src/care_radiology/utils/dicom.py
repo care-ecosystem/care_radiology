@@ -7,6 +7,15 @@ from care_radiology.settings import plugin_settings
 
 DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
+
+def get_pacs_query_timeout():
+    """Returns (connect_timeout, read_timeout) tuple for QIDO-RS queries"""
+    return (
+        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
+        plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT,
+    )
+
+
 class DICOM_TAG(Enum):
     # Study Tags
     StudyInstanceUID = "0020000D"
@@ -41,6 +50,11 @@ def fetch_study(dicom_study_uid):
     if study is None:
         return None
 
+    # Query series list, handle timeout/failure gracefully
+    series_data = d_query_series_for_study(study_uid)
+    if series_data is None:
+        return None
+
     series = [
         {
             "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
@@ -51,7 +65,7 @@ def fetch_study(dicom_study_uid):
             "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
             "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
         }
-        for s in d_query_series_for_study(study_uid)
+        for s in series_data
     ]
 
     study_description = (
@@ -83,13 +97,17 @@ def fetch_study(dicom_study_uid):
 
 
 def d_query_instance(instance_id):
-    response = requests.get(
-        url=f"{DCM4CHEE_BASEURL}/rs/instances",
-        headers={
-            "Accept": "application/json",
-        },
-        params={"SOPInstanceUID": instance_id},
-    )
+    try:
+        response = requests.get(
+            url=f"{DCM4CHEE_BASEURL}/rs/instances",
+            headers={
+                "Accept": "application/json",
+            },
+            params={"SOPInstanceUID": instance_id},
+            timeout=get_pacs_query_timeout(),
+        )
+    except requests.Timeout:
+        return None
 
     if not response.ok:
         return None
@@ -106,12 +124,16 @@ def d_query_instance(instance_id):
 
 
 def d_query_series_for_study(study_id):
-    response = requests.get(
-        url=f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series",
-        headers={
-            "Accept": "application/json",
-        },
-    )
+    try:
+        response = requests.get(
+            url=f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series",
+            headers={
+                "Accept": "application/json",
+            },
+            timeout=get_pacs_query_timeout(),
+        )
+    except requests.Timeout:
+        return None
 
     if not response.ok:
         return None
@@ -128,21 +150,25 @@ def d_query_series_for_study(study_id):
 
 
 def d_query_study(study_uid):
-    response = requests.get(
-        url=f"{DCM4CHEE_BASEURL}/rs/studies",
-        headers={
-            "Accept": "application/json",
-        },
-        params={
-            "StudyInstanceUID": study_uid,
-            "includefield": ",".join([
-                DICOM_TAG.StudyDescription.value,
-                DICOM_TAG.StudyModalities.value,
-                DICOM_TAG.StudyDate.value,
-                DICOM_TAG.StudyTime.value,
-            ]),
-        },
-    )
+    try:
+        response = requests.get(
+            url=f"{DCM4CHEE_BASEURL}/rs/studies",
+            headers={
+                "Accept": "application/json",
+            },
+            params={
+                "StudyInstanceUID": study_uid,
+                "includefield": ",".join([
+                    DICOM_TAG.StudyDescription.value,
+                    DICOM_TAG.StudyModalities.value,
+                    DICOM_TAG.StudyDate.value,
+                    DICOM_TAG.StudyTime.value,
+                ]),
+            },
+            timeout=get_pacs_query_timeout(),
+        )
+    except requests.Timeout:
+        return None
 
     if not response.ok:
         return None

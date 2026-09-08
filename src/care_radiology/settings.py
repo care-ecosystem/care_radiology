@@ -103,9 +103,21 @@ REQUIRED_SETTINGS = {
 }
 
 DEFAULTS = {
-    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",
-    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",
-    "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",
+    # ========================================================================
+    # Required Settings (must be configured via environment or plugin config)
+    # ========================================================================
+    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE)
+    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",             # Secret key for webhook authentication from DICOM modality worklist
+
+    # ========================================================================
+    # Optional Settings (has sensible defaults, can override if needed)
+    # ========================================================================
+    "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",  # Service request category for radiology procedures (default: "imaging")
+
+    # PACS Server Timeout Configuration
+    "CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT": 30,       # TCP connect timeout for all PACS operations (seconds)
+    "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,       # Read timeout for STOW-RS uploads (seconds, 10 minutes)
+    "CARE_RADIOLOGY_PACS_QUERY_TIMEOUT": 60,         # Read timeout for QIDO-RS queries (seconds, 1 minute)
 }
 
 plugin_settings = PluginSettings(
