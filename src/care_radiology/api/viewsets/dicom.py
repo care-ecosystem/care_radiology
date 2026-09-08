@@ -1,25 +1,22 @@
 import logging
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from django.db.models import Q
 
 from care.emr.models.device import Device
 from care.emr.models.encounter import Encounter
-from care.security.authorization.base import AuthorizationController
-from care.utils.shortcuts import get_object_or_404
-from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
-from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.viewsets import ViewSet
-
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
 from care.emr.resources.encounter.spec import EncounterRetrieveSpec
 from care.emr.resources.service_request.spec import ServiceRequestReadSpec
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care.security.authorization.base import AuthorizationController
+from care.utils.shortcuts import get_object_or_404
+from django.db.models import Q
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.response import Response
+from rest_framework.viewsets import ViewSet
+
 from care_radiology.models.dicom_study import DicomStudy
+from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
@@ -33,12 +30,10 @@ from care_radiology.services.dicom_service import (
 from care_radiology.utils.dicom import parse_date
 from care_radiology.utils.patient import get_patient_uhid
 
-
 logger = logging.getLogger(__name__)
 
 
 class DicomViewSet(ViewSet):
-
     # A dummy API for JWT verification called by nginx-proxy for dicomweb requests
     @action(detail=False, methods=["get"], url_path="authenticate")
     def authenticate(self, _):
@@ -48,14 +43,10 @@ class DicomViewSet(ViewSet):
         detail=False,
         methods=["get"],
         url_path="worklist",
-        permission_classes = [AllowAny]
+        authentication_classes=[StaticAPIKeyAuthentication],
+        permission_classes=[StaticAPIKeyAuthorization],
     )
     def worklist(self, request):
-        authenticator = StaticAPIKeyAuthentication()
-        user_auth_tuple = authenticator.authenticate(request)
-        if user_auth_tuple is None:
-            raise AuthenticationFailed("Invalid API key")
-
         modality = request.query_params.get("modality", None)
         from_date = parse_date(request.query_params.get("from"))
         to_date = parse_date(request.query_params.get("to"))
@@ -68,10 +59,7 @@ class DicomViewSet(ViewSet):
             limit=1000,
         )
 
-        return Response(data={
-            "status": "success",
-            "results": results
-        }, status=200)
+        return Response(data={"status": "success", "results": results}, status=200)
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
@@ -79,7 +67,7 @@ class DicomViewSet(ViewSet):
         dcm_file = request.FILES.get("file")
 
         if not AuthorizationController.call("can_write_patient_obj", self.request.user, patient):
-            raise PermissionDenied(f"You do not have permission to upload DICOM for this patient")
+            raise PermissionDenied("You do not have permission to upload DICOM for this patient")
 
         try:
             result = upload_dicom_file(patient, dcm_file)
@@ -131,13 +119,11 @@ class DicomViewSet(ViewSet):
         study_uid = request.data.get("study_uid")
 
         if not service_request_id or not study_uid:
-            return Response(
-                {"detail": "service_request_id and study_uid are required"}, status=400
-            )
+            return Response({"detail": "service_request_id and study_uid are required"}, status=400)
 
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
-            raise PermissionDenied(f"You do not have permission to update this service request")
+            raise PermissionDenied("You do not have permission to update this service request")
 
         record = link_service_request_to_study(service_request, study_uid)
 
@@ -164,11 +150,10 @@ class DicomViewSet(ViewSet):
             encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
 
             if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
-                raise PermissionDenied(f"You do not have permission to view this encounter")
+                raise PermissionDenied("You do not have permission to view this encounter")
 
             radiology_service_requests = RadiologyServiceRequest.objects.filter(
-                service_request__encounter__external_id=encounter_external_id,
-                dicom_study__isnull=False
+                service_request__encounter__external_id=encounter_external_id, dicom_study__isnull=False
             ).select_related("dicom_study")
 
             studies = list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
@@ -176,16 +161,13 @@ class DicomViewSet(ViewSet):
             patient = get_object_or_404(Patient, external_id=patient_external_id)
 
             if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
-                raise PermissionDenied(f"You do not have permission to view this patient")
+                raise PermissionDenied("You do not have permission to view this patient")
 
             studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_study = {
-                executor.submit(fetch_study, study): study
-                for study in studies
-            }
+            future_to_study = {executor.submit(fetch_study, study): study for study in studies}
             for future in as_completed(future_to_study):
                 result = future.result()
                 if result is not None:
@@ -203,7 +185,7 @@ class DicomViewSet(ViewSet):
 
         service_request = ServiceRequest.objects.get(external_id=service_request_external_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
-            raise PermissionDenied(f"You do not have permission to view this service request")
+            raise PermissionDenied("You do not have permission to view this service request")
 
         tsr = RadiologyServiceRequest.objects.filter(
             service_request__external_id=service_request_external_id,
@@ -212,20 +194,19 @@ class DicomViewSet(ViewSet):
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_study = {
-                executor.submit(fetch_study, r.dicom_study): r
-                for r in tsr
-            }
+            future_to_study = {executor.submit(fetch_study, r.dicom_study): r for r in tsr}
 
             for future in as_completed(future_to_study):
                 r = future_to_study[future]
                 service_request = ServiceRequestReadSpec.serialize(r.service_request).to_json()
                 service_request["encounter"] = EncounterRetrieveSpec.serialize(r.service_request.encounter).to_json()
 
-                results.append({
-                    "service_request": service_request,
-                    "dicom_study": future.result(),
-                })
+                results.append(
+                    {
+                        "service_request": service_request,
+                        "dicom_study": future.result(),
+                    }
+                )
 
         return Response(
             results,
@@ -243,9 +224,9 @@ def get_service_requests(
     filters = Q(status="active", deleted=False)
 
     if modality:
-        device_location_ids = Device.objects.filter(
-            registered_name__iexact=modality
-        ).values_list("current_location_id", flat=True)
+        device_location_ids = Device.objects.filter(registered_name__iexact=modality).values_list(
+            "current_location_id", flat=True
+        )
         filters &= Q(activity_definition__locations__overlap=device_location_ids)
 
     if from_date:
@@ -254,7 +235,8 @@ def get_service_requests(
     if to_date:
         filters &= Q(created_date__lte=to_date)
 
-    logger.info("Service Request filters - modality=%s, from_date=%s, to_date=%s",
+    logger.info(
+        "Service Request filters - modality=%s, from_date=%s, to_date=%s",
         modality,
         from_date,
         to_date,
@@ -304,12 +286,9 @@ def get_service_requests(
                     "created_by": created_by,
                     "priority": sr.priority,
                     "technician_instruction": sr.note,
-                    "patient_instruction": sr.patient_instruction
+                    "patient_instruction": sr.patient_instruction,
                 },
-                "facility": {
-                    "id": sr.facility.external_id,
-                    "name": sr.facility.name
-                },
+                "facility": {"id": sr.facility.external_id, "name": sr.facility.name},
                 "patient": {
                     "id": sr.patient.id,
                     "external_id": sr.patient.external_id,
@@ -318,8 +297,8 @@ def get_service_requests(
                     "phone_number": sr.patient.phone_number,
                     "gender": sr.patient.gender,
                     "age": sr.patient.age,
-                    "patient_uhid": patient_uhid
-                }
+                    "patient_uhid": patient_uhid,
+                },
             }
         )
 
