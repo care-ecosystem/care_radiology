@@ -7,6 +7,7 @@ from django.db.models import Q
 from django.contrib.auth.models import AnonymousUser
 
 from care.emr.models.device import Device
+from care.emr.models.encounter import Encounter
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
 from rest_framework.authentication import BaseAuthentication
@@ -166,11 +167,33 @@ class DicomViewSet(ViewSet):
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
         patient_external_id = request.query_params.get("patientId")
-        patient = get_object_or_404(Patient, external_id=patient_external_id)
-        if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
-            raise PermissionDenied(f"You do not have permission to view this patient")
+        encounter_external_id = request.query_params.get("encounterId")
 
-        studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
+        if not encounter_external_id and not patient_external_id:
+            return Response(
+                {"detail": "Either patientId or encounterId is required"},
+                status=400,
+            )
+
+        if encounter_external_id:
+            encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
+
+            if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
+                raise PermissionDenied(f"You do not have permission to view this encounter")
+
+            radiology_service_requests = RadiologyServiceRequest.objects.filter(
+                service_request__encounter__external_id=encounter_external_id,
+                dicom_study__isnull=False
+            ).select_related("dicom_study")
+
+            studies = list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
+        else:
+            patient = get_object_or_404(Patient, external_id=patient_external_id)
+
+            if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
+                raise PermissionDenied(f"You do not have permission to view this patient")
+
+            studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
