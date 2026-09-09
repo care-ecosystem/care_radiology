@@ -7,6 +7,7 @@ from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
 from care.emr.resources.encounter.spec import EncounterRetrieveSpec
 from care.emr.resources.service_request.spec import ServiceRequestReadSpec
+from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
 from django.db.models import Q
@@ -15,7 +16,6 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
-from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 class DicomViewSet(ViewSet):
+    def _authorize_read_radiology_data(self, facility):
+        if not AuthorizationController.call("can_read_radiology_data", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to read radiology data for this facility")
+
+    def _authorize_write_radiology_data(self, facility):
+        if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to write radiology data for this facility")
+
     # A dummy API for JWT verification called by nginx-proxy for dicomweb requests
     @action(detail=False, methods=["get"], url_path="authenticate")
     def authenticate(self, _):
@@ -63,11 +71,17 @@ class DicomViewSet(ViewSet):
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
+        facility_id = request.data.get("facility_id")
+        if not facility_id:
+            return Response({"detail": "facility_id is required"}, status=400)
+
         patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
+        facility = get_object_or_404(Facility, external_id=facility_id)
         dcm_file = request.FILES.get("file")
 
         if not AuthorizationController.call("can_write_patient_obj", self.request.user, patient):
             raise PermissionDenied("You do not have permission to upload DICOM for this patient")
+        self._authorize_write_radiology_data(facility)
 
         try:
             result = upload_dicom_file(patient, dcm_file)
@@ -124,6 +138,7 @@ class DicomViewSet(ViewSet):
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
             raise PermissionDenied("You do not have permission to update this service request")
+        self._authorize_write_radiology_data(service_request.facility)
 
         record = link_service_request_to_study(service_request, study_uid)
 
@@ -137,33 +152,25 @@ class DicomViewSet(ViewSet):
 
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
-        patient_external_id = request.query_params.get("patientId")
         encounter_external_id = request.query_params.get("encounterId")
 
-        if not encounter_external_id and not patient_external_id:
+        if not encounter_external_id:
             return Response(
-                {"detail": "Either patientId or encounterId is required"},
+                {"detail": "encounterId is required"},
                 status=400,
             )
 
-        if encounter_external_id:
-            encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
+        encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
 
-            if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
-                raise PermissionDenied("You do not have permission to view this encounter")
+        if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
+            raise PermissionDenied("You do not have permission to view this encounter")
+        self._authorize_read_radiology_data(encounter.facility)
 
-            radiology_service_requests = RadiologyServiceRequest.objects.filter(
-                service_request__encounter__external_id=encounter_external_id, dicom_study__isnull=False
-            ).select_related("dicom_study")
+        radiology_service_requests = RadiologyServiceRequest.objects.filter(
+            service_request__encounter__external_id=encounter_external_id, dicom_study__isnull=False
+        ).select_related("dicom_study")
 
-            studies = list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
-        else:
-            patient = get_object_or_404(Patient, external_id=patient_external_id)
-
-            if not AuthorizationController.call("can_view_patient_obj", self.request.user, patient):
-                raise PermissionDenied("You do not have permission to view this patient")
-
-            studies = DicomStudy.objects.filter(patient__external_id=patient_external_id)
+        studies = list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -186,6 +193,7 @@ class DicomViewSet(ViewSet):
         service_request = ServiceRequest.objects.get(external_id=service_request_external_id)
         if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
             raise PermissionDenied("You do not have permission to view this service request")
+        self._authorize_read_radiology_data(service_request.facility)
 
         tsr = RadiologyServiceRequest.objects.filter(
             service_request__external_id=service_request_external_id,

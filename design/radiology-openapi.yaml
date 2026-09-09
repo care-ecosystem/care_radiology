@@ -200,7 +200,8 @@ paths:
         the study UID is extracted from the response, and a `DicomStudy` record is
         created or updated in CARE. The study is then cached and returned.
 
-        Requires `can_write_patient_obj` permission on the patient.
+        Requires `can_write_patient_obj` permission on the patient and
+        `can_write_radiology_data` permission on the given facility.
       operationId: dicomUpload
       requestBody:
         required: true
@@ -210,12 +211,17 @@ paths:
               type: object
               required:
                 - patient_id
+                - facility_id
                 - file
               properties:
                 patient_id:
                   type: string
                   format: uuid
                   description: Patient external_id
+                facility_id:
+                  type: string
+                  format: uuid
+                  description: Facility external_id — used to authorize this upload against radiology data permissions
                 file:
                   type: string
                   format: binary
@@ -238,13 +244,18 @@ paths:
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: No file provided
+          description: No file provided, or facility_id missing
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                error: "No file provided"
+              examples:
+                no_file:
+                  value:
+                    error: "No file provided"
+                no_facility:
+                  value:
+                    detail: "facility_id is required"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -270,7 +281,8 @@ paths:
         Links an already-uploaded DICOM study to a CARE `ServiceRequest`. Called once
         all files for a study have finished uploading via `upload` / `upload-dicom-external`.
 
-        Requires `can_write_service_request` permission on the service request.
+        Requires `can_write_service_request` permission on the service request, and
+        `can_write_radiology_data` permission on the service request's facility.
       operationId: dicomLinkServiceRequest
       requestBody:
         required: true
@@ -329,19 +341,24 @@ paths:
     get:
       tags:
         - DICOM Studies
-      summary: Get DICOM studies for a patient
+      summary: Get DICOM studies for an encounter
       description: |
-        Returns all DICOM studies linked to the given patient, fetching live metadata
-        (study date, description, modalities, series) from DCM4CHEE in parallel threads.
-        Studies not found in DCM4CHEE are omitted from the response.
+        Returns all DICOM studies linked to the given encounter, fetching live
+        metadata (study date, description, modalities, series) from DCM4CHEE in parallel
+        threads. Studies not found in DCM4CHEE are omitted from the response.
 
-        Requires `can_view_patient_obj` permission on the patient.
+        Requires `can_view_encounter_obj` permission on the encounter, plus
+        `can_read_radiology_data` permission on the encounter's facility.
+
+        Note: a previous `patientId` query param was removed — `Patient` has no single
+        owning facility to gate `can_read_radiology_data` against, so patient-scoped
+        lookups are no longer supported on this endpoint.
       operationId: dicomGetStudies
       parameters:
-        - name: patientId
+        - name: encounterId
           in: query
           required: true
-          description: Patient external_id (UUID)
+          description: Encounter external_id (UUID)
           schema:
             type: string
             format: uuid
@@ -354,6 +371,14 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/DicomStudyDetail'
+        '400':
+          description: encounterId was not provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "encounterId is required"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -371,7 +396,9 @@ paths:
         `RadiologyServiceRequest` join), including live DCM4CHEE metadata and
         the full service request detail.
 
-        Requires `can_write_service_request` permission on the service request.
+        Requires `can_write_service_request` permission on the service request (a read-only
+        endpoint gated by a write permission — pre-existing quirk), plus
+        `can_read_radiology_data` permission on the service request's facility.
       operationId: dicomGetServiceRequests
       parameters:
         - name: serviceRequestId
@@ -545,7 +572,7 @@ paths:
         Optionally filter by `observation_definition`, `activity_definition`,
         or `title` (case-insensitive contains).
 
-        Requires `can_read_radiology_report` permission for the facility.
+        Requires `can_read_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: listObservationTemplates
       parameters:
         - name: facility
@@ -604,7 +631,7 @@ paths:
         (code/value/description) replacing any existing fields. `title` must be
         unique per facility.
 
-        Requires `can_write_radiology_report` permission for the facility.
+        Requires `can_write_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: createObservationTemplate
       requestBody:
         required: true
@@ -672,7 +699,7 @@ paths:
         Partially updates `title` and/or `description` of an existing observation
         template. Fields (code/value/description) cannot be changed via update.
 
-        Requires `can_write_radiology_report` permission for the facility.
+        Requires `can_write_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: updateObservationTemplate
       parameters:
         - $ref: '#/components/parameters/Id'
