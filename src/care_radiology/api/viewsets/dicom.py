@@ -5,8 +5,6 @@ from care.emr.models.device import Device
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
-from care.emr.resources.encounter.spec import EncounterRetrieveSpec
-from care.emr.resources.service_request.spec import ServiceRequestReadSpec
 from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
@@ -150,16 +148,7 @@ class DicomViewSet(ViewSet):
             status=200,
         )
 
-    @action(detail=False, methods=["get"], url_path="studies")
-    def get_studies(self, request):
-        encounter_external_id = request.query_params.get("encounterId")
-
-        if not encounter_external_id:
-            return Response(
-                {"detail": "encounterId is required"},
-                status=400,
-            )
-
+    def _studies_for_encounter(self, encounter_external_id):
         encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
 
         if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
@@ -167,10 +156,41 @@ class DicomViewSet(ViewSet):
         self._authorize_read_radiology_data(encounter.facility)
 
         radiology_service_requests = RadiologyServiceRequest.objects.filter(
-            service_request__encounter__external_id=encounter_external_id, dicom_study__isnull=False
+            service_request__encounter__external_id=encounter_external_id,
+            dicom_study__dicom_study_uid__isnull=False,
         ).select_related("dicom_study")
 
-        studies = list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
+        return list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
+
+    def _studies_for_service_request(self, service_request_external_id):
+        service_request = get_object_or_404(ServiceRequest, external_id=service_request_external_id)
+
+        if not AuthorizationController.call("can_read_service_request", self.request.user, service_request):
+            raise PermissionDenied("You do not have permission to view this service request")
+        self._authorize_read_radiology_data(service_request.facility)
+
+        radiology_service_requests = RadiologyServiceRequest.objects.filter(
+            service_request__external_id=service_request_external_id,
+            dicom_study__dicom_study_uid__isnull=False,
+        ).select_related("dicom_study")
+
+        return list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
+
+    @action(detail=False, methods=["get"], url_path="studies")
+    def get_studies(self, request):
+        encounter_external_id = request.query_params.get("encounterId")
+        service_request_external_id = request.query_params.get("serviceRequestId")
+
+        if not encounter_external_id and not service_request_external_id:
+            return Response(
+                {"detail": "Either encounterId or serviceRequestId is required"},
+                status=400,
+            )
+
+        if service_request_external_id:
+            studies = self._studies_for_service_request(service_request_external_id)
+        else:
+            studies = self._studies_for_encounter(encounter_external_id)
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -181,45 +201,6 @@ class DicomViewSet(ViewSet):
                     results.append(result)
 
         return Response(results, status=200)
-
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path="service-requests",
-    )
-    def get_servicerequests(self, request):
-        service_request_external_id = request.query_params.get("serviceRequestId")
-
-        service_request = ServiceRequest.objects.get(external_id=service_request_external_id)
-        if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
-            raise PermissionDenied("You do not have permission to view this service request")
-        self._authorize_read_radiology_data(service_request.facility)
-
-        tsr = RadiologyServiceRequest.objects.filter(
-            service_request__external_id=service_request_external_id,
-            dicom_study__dicom_study_uid__isnull=False,
-        ).select_related("dicom_study")
-
-        results = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_study = {executor.submit(fetch_study, r.dicom_study): r for r in tsr}
-
-            for future in as_completed(future_to_study):
-                r = future_to_study[future]
-                service_request = ServiceRequestReadSpec.serialize(r.service_request).to_json()
-                service_request["encounter"] = EncounterRetrieveSpec.serialize(r.service_request.encounter).to_json()
-
-                results.append(
-                    {
-                        "service_request": service_request,
-                        "dicom_study": future.result(),
-                    }
-                )
-
-        return Response(
-            results,
-            status=200,
-        )
 
 
 def get_service_requests(

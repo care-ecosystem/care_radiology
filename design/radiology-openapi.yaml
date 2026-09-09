@@ -341,24 +341,40 @@ paths:
     get:
       tags:
         - DICOM Studies
-      summary: Get DICOM studies for an encounter
+      summary: Get DICOM studies for an encounter or a service request
       description: |
-        Returns all DICOM studies linked to the given encounter, fetching live
-        metadata (study date, description, modalities, series) from DCM4CHEE in parallel
-        threads. Studies not found in DCM4CHEE are omitted from the response.
+        Returns all DICOM studies linked to the given scope, fetching live metadata (study
+        date, description, modalities, series) from DCM4CHEE in parallel threads. Studies not
+        found in DCM4CHEE are omitted from the response.
 
-        Requires `can_view_encounter_obj` permission on the encounter, plus
-        `can_read_radiology_data` permission on the encounter's facility.
+        Exactly one of `encounterId` or `serviceRequestId` must be provided; if both are
+        given, `serviceRequestId` wins.
+
+        If `encounterId` is given: requires `can_view_encounter_obj` permission on the
+        encounter, plus `can_read_radiology_data` permission on the encounter's facility.
+        If `serviceRequestId` is given: requires `can_read_service_request` permission on the
+        service request, plus `can_read_radiology_data` permission on its facility.
+
+        The response is always a bare list of DICOM studies — it does not carry any
+        `ServiceRequest`/`Encounter` data. A caller that needs service-request detail (e.g. its
+        `title`) alongside the studies should fetch it separately via the core CARE
+        `GET /api/v1/facility/{facilityId}/service_request/{serviceRequestId}/` endpoint.
 
         Note: a previous `patientId` query param was removed — `Patient` has no single
         owning facility to gate `can_read_radiology_data` against, so patient-scoped
-        lookups are no longer supported on this endpoint.
+        lookups are not supported on this endpoint. This endpoint also supersedes the former
+        `GET /dicom/service-requests/`, which has been removed.
       operationId: dicomGetStudies
       parameters:
         - name: encounterId
           in: query
-          required: true
-          description: Encounter external_id (UUID)
+          description: Encounter external_id (UUID). Required if serviceRequestId is not given.
+          schema:
+            type: string
+            format: uuid
+        - name: serviceRequestId
+          in: query
+          description: ServiceRequest external_id (UUID). Takes priority over encounterId if both are given.
           schema:
             type: string
             format: uuid
@@ -372,51 +388,13 @@ paths:
                 items:
                   $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: encounterId was not provided
+          description: Neither encounterId nor serviceRequestId was provided
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               example:
-                detail: "encounterId is required"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /api/care_radiology/dicom/service-requests/:
-    get:
-      tags:
-        - DICOM Studies
-      summary: Get DICOM studies for a service request
-      description: |
-        Returns all DICOM studies linked to a given service request (via
-        `RadiologyServiceRequest` join), including live DCM4CHEE metadata and
-        the full service request detail.
-
-        Requires `can_write_service_request` permission on the service request (a read-only
-        endpoint gated by a write permission — pre-existing quirk), plus
-        `can_read_radiology_data` permission on the service request's facility.
-      operationId: dicomGetServiceRequests
-      parameters:
-        - name: serviceRequestId
-          in: query
-          required: true
-          description: ServiceRequest external_id (UUID)
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: List of service request + DICOM study pairs
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ServiceRequestStudyEntry'
+                detail: "Either encounterId or serviceRequestId is required"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -874,341 +852,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
-
-    EncounterDetail:
-      type: object
-      description: |
-        Encounter as returned by `EncounterRetrieveSpec`. Includes full patient,
-        facility, care team, organizations, location history, and audit users.
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: Encounter external_id
-        status:
-          type: string
-          enum: [planned, in_progress, on_hold, discharged, completed, cancelled, discontinued, entered_in_error, unknown]
-        encounter_class:
-          type: string
-        period:
-          type: object
-          nullable: true
-          description: Start/end period of the encounter
-          properties:
-            start:
-              type: string
-              format: date-time
-              nullable: true
-            end:
-              type: string
-              format: date-time
-              nullable: true
-        hospitalization:
-          type: object
-          nullable: true
-        priority:
-          type: string
-        external_identifier:
-          type: string
-          nullable: true
-        discharge_summary_advice:
-          type: string
-          nullable: true
-        patient:
-          type: object
-          description: Nested patient (PatientRetrieveSpec)
-          properties:
-            id:
-              type: string
-              format: uuid
-            name:
-              type: string
-            gender:
-              type: string
-              nullable: true
-            age:
-              type: integer
-              nullable: true
-            phone_number:
-              type: string
-              nullable: true
-            address:
-              type: string
-              nullable: true
-        facility:
-          type: object
-          description: Nested facility (FacilityBareMinimumSpec)
-          properties:
-            id:
-              type: string
-              format: uuid
-            name:
-              type: string
-        status_history:
-          type: object
-          description: History of status transitions
-          properties:
-            history:
-              type: array
-              items:
-                type: object
-                properties:
-                  status:
-                    type: string
-                  moved_at:
-                    type: string
-                    format: date-time
-        encounter_class_history:
-          type: object
-          description: History of encounter class transitions
-          properties:
-            history:
-              type: array
-              items:
-                type: object
-                properties:
-                  status:
-                    type: string
-                  moved_at:
-                    type: string
-                    format: date-time
-        created_date:
-          type: string
-          format: date-time
-        modified_date:
-          type: string
-          format: date-time
-        tags:
-          type: array
-          items:
-            type: object
-        current_location:
-          nullable: true
-          description: Current facility location (FacilityLocationMinimalListSpec)
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            name:
-              type: string
-            status:
-              type: string
-            operational_status:
-              type: string
-            form:
-              type: string
-            mode:
-              type: string
-            has_children:
-              type: boolean
-            system_availability_status:
-              type: string
-            parent:
-              type: object
-              nullable: true
-        care_team:
-          type: array
-          description: List of care team members (user + role)
-          items:
-            type: object
-            properties:
-              member:
-                $ref: '#/components/schemas/LiteUser'
-              role:
-                type: object
-                description: ValueSet-bound practitioner role coding
-        appointment:
-          nullable: true
-          description: Linked appointment booking (TokenBookingReadSpec)
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            token_slot:
-              type: object
-            booked_on:
-              type: string
-              format: date-time
-            booked_by:
-              $ref: '#/components/schemas/LiteUser'
-            status:
-              type: string
-            note:
-              type: string
-            resource_type:
-              type: string
-            resource:
-              type: object
-            facility:
-              type: object
-            created_date:
-              type: string
-              format: date-time
-            modified_date:
-              type: string
-              format: date-time
-        organizations:
-          type: array
-          description: Facility organizations linked to this encounter (FacilityOrganizationReadSpec)
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                format: uuid
-              name:
-                type: string
-              description:
-                type: string
-              active:
-                type: boolean
-              org_type:
-                type: string
-              parent:
-                type: object
-                nullable: true
-              metadata:
-                type: object
-              system_generated:
-                type: boolean
-              level_cache:
-                type: integer
-              has_children:
-                type: boolean
-              created_by:
-                allOf:
-                  - $ref: '#/components/schemas/LiteUser'
-                nullable: true
-              updated_by:
-                allOf:
-                  - $ref: '#/components/schemas/LiteUser'
-                nullable: true
-        location_history:
-          type: array
-          description: Ordered list of location assignments (FacilityLocationEncounterListSpecWithLocation), newest first
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-                format: uuid
-              start_datetime:
-                type: string
-                format: date-time
-              end_datetime:
-                type: string
-                format: date-time
-                nullable: true
-              status:
-                type: string
-              location:
-                type: object
-                description: FacilityLocationListSpec
-                properties:
-                  id:
-                    type: string
-                    format: uuid
-                  name:
-                    type: string
-                  status:
-                    type: string
-                  operational_status:
-                    type: string
-                  form:
-                    type: string
-                  mode:
-                    type: string
-                  has_children:
-                    type: boolean
-                  system_availability_status:
-                    type: string
-                  parent:
-                    type: object
-                    nullable: true
-        created_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-        updated_by:
-          allOf:
-            - $ref: '#/components/schemas/LiteUser'
-          nullable: true
-        extensions:
-          type: object
-          nullable: true
-
-    ServiceRequestDetail:
-      type: object
-      description: |
-        Service request as returned by `ServiceRequestReadSpec`.
-        The `encounter` field is serialized via `EncounterRetrieveSpec`.
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: ServiceRequest external_id
-        title:
-          type: string
-        status:
-          type: string
-          enum: [draft, active, on_hold, entered_in_error, ended, completed, revoked]
-        intent:
-          type: string
-          enum: [proposal, plan, directive, order]
-        priority:
-          type: string
-          enum: [routine, urgent, asap, stat]
-        category:
-          type: string
-        do_not_perform:
-          type: boolean
-          nullable: true
-        note:
-          type: string
-          nullable: true
-        code:
-          type: object
-          description: ValueSet-bound coding for the procedure code
-        body_site:
-          type: object
-          nullable: true
-        occurance:
-          type: string
-          format: date-time
-          nullable: true
-        patient_instruction:
-          type: string
-          nullable: true
-        created_date:
-          type: string
-          format: date-time
-        modified_date:
-          type: string
-          format: date-time
-        encounter:
-          $ref: '#/components/schemas/EncounterDetail'
-        tags:
-          type: array
-          items:
-            type: object
-        requester:
-          type: object
-          nullable: true
-          description: Nested user object (UserSpec)
-
-    ServiceRequestStudyEntry:
-      type: object
-      description: A single entry returned by the service-requests DICOM endpoint — pairs the full service request with its linked DICOM study metadata.
-      properties:
-        service_request:
-          $ref: '#/components/schemas/ServiceRequestDetail'
-        dicom_study:
-          allOf:
-            - $ref: '#/components/schemas/DicomStudyDetail'
-          nullable: true
-          description: Live DCM4CHEE study metadata; null if the study is not found in DCM4CHEE
 
     WorklistEntry:
       type: object
