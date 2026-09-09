@@ -51,7 +51,7 @@ class ObservationTemplateViewSet(
     def authorize_create(self, request_obj):
         facility = Facility.objects.get(external_id=request_obj.facility)
         if not AuthorizationController.call(
-            "can_write_radiology_report", self.request.user, facility=facility
+            "can_write_radiology_observation_template", self.request.user, facility=facility
         ):
             raise PermissionDenied(
                 "You do not have permission to create templates for this facility"
@@ -59,7 +59,7 @@ class ObservationTemplateViewSet(
 
     def authorize_update(self, request_obj, model_instance):
         if not AuthorizationController.call(
-            "can_write_radiology_report",
+            "can_write_radiology_observation_template",
             self.request.user,
             facility=model_instance.facility,
         ):
@@ -92,7 +92,7 @@ class ObservationTemplateViewSet(
 
         facility_obj = Facility.objects.filter(external_id=facility).first()
         if not facility_obj or not AuthorizationController.call(
-            "can_read_radiology_report", self.request.user, facility=facility_obj
+            "can_read_radiology_observation_template", self.request.user, facility=facility_obj
         ):
             raise PermissionDenied(
                 "You do not have permission to read templates for this facility"
