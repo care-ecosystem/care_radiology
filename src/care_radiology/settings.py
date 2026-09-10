@@ -97,17 +97,14 @@ class PluginSettings:  # pragma: no cover
             delattr(self, "_user_settings")
 
 
-REQUIRED_SETTINGS = {
-    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL",
-    "CARE_RADIOLOGY_WEBHOOK_SECRET"
-}
+REQUIRED_SETTINGS = set()  # All settings are optional - validated at runtime when used
 
 DEFAULTS = {
     # ========================================================================
-    # Required Settings (must be configured via environment or plugin config)
+    # Settings validated at runtime when used (allows CARE images to build)
     # ========================================================================
-    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE)
-    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",             # Secret key for webhook authentication from DICOM modality worklist
+    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE) - required for PACS operations
+    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",             # Secret key for webhook authentication from DICOM modality worklist - required for webhook endpoints
 
     # ========================================================================
     # Optional Settings (has sensible defaults, can override if needed)
