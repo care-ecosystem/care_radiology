@@ -1,6 +1,7 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from care.emr.api.viewsets.base import emr_exception_handler
 from care.emr.models.device import Device
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
@@ -9,12 +10,14 @@ from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
+from care_radiology.api.specs.dicom import DicomStudiesQuerySpec, DicomStudyLinkSpec
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
@@ -33,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 
 class DicomViewSet(ViewSet):
+    def get_exception_handler(self):
+        return emr_exception_handler
+
     def _authorize_read_radiology_data(self, facility):
         if not AuthorizationController.call("can_read_radiology_data", self.request.user, facility):
             raise PermissionDenied("You do not have permission to read radiology data for this facility")
@@ -74,7 +80,7 @@ class DicomViewSet(ViewSet):
     def upload(self, request):
         facility_id = request.data.get("facility_id")
         if not facility_id:
-            return Response({"detail": "facility_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            raise ValidationError({"facility_id": "This value is required"})
 
         patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         facility = get_object_or_404(Facility, external_id=facility_id)
@@ -95,7 +101,7 @@ class DicomViewSet(ViewSet):
             )
         except DicomUploadError as e:
             return Response(
-                data={"error": e.message, **e.extra},
+                data={"errors": [{"type": "dicom_upload_error", "msg": e.message, **e.extra}]},
                 status=e.status_code,
             )
 
@@ -122,29 +128,23 @@ class DicomViewSet(ViewSet):
             )
         except DicomUploadError as e:
             return Response(
-                data={"error": e.message, **e.extra},
+                data={"errors": [{"type": "dicom_upload_error", "msg": e.message, **e.extra}]},
                 status=e.status_code,
             )
 
     # Link an already-uploaded study to a service request, called once all files for
     # a study have finished uploading via `upload`/`upload-dicom-external`.
+    @extend_schema(request=DicomStudyLinkSpec)
     @action(detail=False, methods=["post"], url_path="link-service-request")
     def link_service_request(self, request):
-        service_request_id = request.data.get("service_request_id")
-        study_uid = request.data.get("study_uid")
+        request_data = DicomStudyLinkSpec(**request.data)
 
-        if not service_request_id or not study_uid:
-            return Response(
-                {"detail": "service_request_id and study_uid are required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
+        service_request = get_object_or_404(ServiceRequest, external_id=request_data.service_request_id)
         if not AuthorizationController.call("can_write_service_request", request.user, service_request):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(service_request.facility)
 
-        record = link_service_request_to_study(service_request, study_uid)
+        record = link_service_request_to_study(service_request, request_data.study_uid)
 
         return Response(
             {
@@ -187,19 +187,12 @@ class DicomViewSet(ViewSet):
 
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
-        encounter_external_id = request.query_params.get("encounterId")
-        service_request_external_id = request.query_params.get("serviceRequestId")
+        query = DicomStudiesQuerySpec(**request.query_params.dict())
 
-        if not encounter_external_id and not service_request_external_id:
-            return Response(
-                {"detail": "Either encounterId or serviceRequestId is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if service_request_external_id:
-            studies = self._studies_for_service_request(service_request_external_id)
+        if query.service_request_id:
+            studies = self._studies_for_service_request(query.service_request_id)
         else:
-            studies = self._studies_for_encounter(encounter_external_id)
+            studies = self._studies_for_encounter(query.encounter_id)
 
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:

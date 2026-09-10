@@ -124,9 +124,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                detail: "No Facility matches the given query."
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Facility matches the given query."
 
   /api/care_radiology/dicom/upload-dicom-external/:
     post:
@@ -184,26 +186,34 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               examples:
                 no_file:
                   value:
-                    error: "No file provided"
+                    errors:
+                      - type: "dicom_upload_error"
+                        msg: "No file provided"
                 bad_extension:
                   value:
-                    error: "Only .dcm and .dicom files are supported"
-                    filename: "study.png"
+                    errors:
+                      - type: "dicom_upload_error"
+                        msg: "Only .dcm and .dicom files are supported"
+                        filename: "study.png"
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '502':
           description: DCM4CHEE upload failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                error: "Failed to upload to DCM4CHE"
-                status_code: 503
+                errors:
+                  - type: "dicom_upload_error"
+                    msg: "Failed to upload to DCM4CHE"
+                    status_code: 503
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -265,31 +275,42 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               examples:
                 no_file:
                   value:
-                    error: "No file provided"
+                    errors:
+                      - type: "dicom_upload_error"
+                        msg: "No file provided"
                 bad_extension:
                   value:
-                    error: "Only .dcm and .dicom files are supported"
-                    filename: "study.png"
+                    errors:
+                      - type: "dicom_upload_error"
+                        msg: "Only .dcm and .dicom files are supported"
+                        filename: "study.png"
                 no_facility:
                   value:
-                    detail: "facility_id is required"
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          facility_id: ["This value is required"]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '502':
           description: DCM4CHEE upload failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                error: "Failed to upload to DCM4CHE"
-                status_code: 503
+                errors:
+                  - type: "dicom_upload_error"
+                    msg: "Failed to upload to DCM4CHE"
+                    status_code: 503
         '500':
           $ref: '#/components/responses/InternalServerError'
 
@@ -344,13 +365,21 @@ paths:
                         type: object
                         description: Raw payload stored on the link record
         '400':
-          description: service_request_id and study_uid are required
+          description: |
+            Payload failed validation against `DicomStudyLinkSpec` — missing field, malformed
+            `service_request_id` UUID, or empty `study_uid`. One entry per offending field.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                detail: "service_request_id and study_uid are required"
+                errors:
+                  - type: "missing"
+                    loc: ["study_uid"]
+                    msg: "Field required"
+                  - type: "uuid_parsing"
+                    loc: ["service_request_id"]
+                    msg: "Input should be a valid UUID"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -409,13 +438,17 @@ paths:
                 items:
                   $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: Neither encounterId nor serviceRequestId was provided
+          description: |
+            Query failed validation against `DicomStudiesQuerySpec` — neither id given, or one of
+            them is not a valid UUID.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               example:
-                detail: "Either encounterId or serviceRequestId is required"
+                errors:
+                  - type: "value_error"
+                    msg: "Value error, Either encounterId or serviceRequestId is required"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1124,22 +1157,42 @@ components:
                 $ref: '#/components/schemas/ObservationTemplate'
 
     # ===================== Error =====================
+    ErrorEnvelope:
+      type: object
+      description: |
+        Envelope produced by core CARE's `emr_exception_handler`. Used by every endpoint in
+        this plugin for `Http404`, DRF `ValidationError` and pydantic `ValidationError`.
+        `403` / `401` fall through to DRF's default `{"detail": ...}`.
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: '`object_not_found`, `validation_error`, or a pydantic error type such as `missing`'
+                example: "object_not_found"
+              loc:
+                type: array
+                description: Field path (pydantic errors only)
+                items:
+                  type: string
+              msg:
+                description: Human-readable message; an object for DRF field errors
+                oneOf:
+                  - type: string
+                  - type: object
+            additionalProperties: true
+
     Error:
       type: object
+      description: |
+        DRF's default body, used only for `401` and `403`, which bypass
+        `emr_exception_handler`. Everything else uses `ErrorEnvelope`.
       properties:
-        error:
-          type: string
         detail:
           type: string
-        details:
-          type: object
-          nullable: true
-          description: Field-level validation errors
-          example:
-            title: ["This field is required"]
-        filename:
-          type: string
-          description: Name of the rejected upload (returned with file-extension validation errors)
 
   responses:
     BadRequest:
@@ -1147,9 +1200,12 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/ErrorEnvelope'
           example:
-            error: "Invalid input parameters"
+            errors:
+              - type: "missing"
+                loc: ["title"]
+                msg: "Field required"
 
     Unauthorized:
       description: Unauthorized — missing or invalid authentication
@@ -1158,7 +1214,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: "Authentication credentials were not provided"
+            detail: "Authentication credentials were not provided"
 
     Forbidden:
       description: Forbidden — authenticated but not permitted
@@ -1167,22 +1223,26 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: "You do not have permission to perform this action"
+            detail: "You do not have permission to perform this action"
 
     NotFound:
       description: Not Found
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/ErrorEnvelope'
           example:
-            error: "Resource not found"
+            errors:
+              - type: "object_not_found"
+                msg: "No ServiceRequest matches the given query."
 
     InternalServerError:
       description: Internal Server Error
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/ErrorEnvelope'
           example:
-            error: "Internal server error occurred"
+            errors:
+              - type: "dicom_upload_error"
+                msg: "Upload succeeded but failed to fetch complete study details from DCM4CHE"
