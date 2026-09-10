@@ -54,30 +54,6 @@ services:
       - ohif
       - arc
 
-  orthanc:
-    image: orthancteam/orthanc:latest
-    container_name: care-orthanc
-    ports:
-      - "8042:8042" # Web UI
-      - "4242:4242" # DICOM port
-    environment:
-      ORTHANC__NAME: "CARE-ORTHANC"
-      ORTHANC__REGISTERED_USERS: |
-        {"admin": "admin"}
-      ORTHANC__DICOM_MODALITIES: |
-        {
-          "DCM4CHEE": ["DCM4CHEE", "care-arc-1", 11112]
-        }
-      ORTHANC__REMOTE_ACCESS_ALLOWED: "true"
-      ORTHANC__DICOM_AET: "ORTHANC"
-      ORTHANC__DICOM_PORT: "4242"
-      ORTHANC__LUA_SCRIPTS: '["/etc/orthanc/webhook.lua"]'
-      ORTHANC__OVERWRITE_INSTANCES: "true"
-      CARE_RADIOLOGY_WEBHOOK_SECRET: "RADOMSECRET"
-    restart: unless-stopped
-    volumes:
-      - ./care_radiology/docker/orthanc/webhook.lua:/etc/orthanc/webhook.lua
-
 volumes:
   ldap-data:
   ldap-config:
