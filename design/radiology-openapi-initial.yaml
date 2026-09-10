@@ -7,7 +7,7 @@ info:
     This plugin enables radiology workflows within CARE:
     - Manage imaging modality types (CT, MRI, X-Ray, etc.)
     - Manage body parts and scan protocols
-    - Upload DICOM files and retrieve studies from DCM4CHEE (Orthanc)
+    - Upload DICOM files and retrieve studies from DCM4CHEE
     - Create and manage radiologist study reports with full audit trails
     - Save reusable report templates per user
     - Receive study notifications via webhook from the DICOM modality worklist
@@ -560,7 +560,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: "DICOM file uploaded to Orthanc successfully"
+                    example: "DICOM file uploaded successfully"
                   study_uid:
                     type: string
                     description: DICOM Study Instance UID
