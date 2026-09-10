@@ -1,10 +1,13 @@
-import requests
-
-from enum import Enum
+import logging
 from datetime import datetime
+from enum import Enum
+
+import requests
 
 from care_radiology.constants import DCM4CHEE_BASEURL
 from care_radiology.settings import plugin_settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_pacs_query_timeout():
@@ -34,6 +37,7 @@ class DICOM_TAG(Enum):
 
     ReferencedSOPSQ = "00081199"
 
+
 def fetch_study(dicom_study_uid):
     def first(dcm, tag):
         values = d_find(dcm, tag)
@@ -55,9 +59,7 @@ def fetch_study(dicom_study_uid):
         {
             "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
             "series_number": d_find(s, DICOM_TAG.SeriesNumber.value),
-            "series_instance_count": d_find(
-                s, DICOM_TAG.NumberOfSeriesRelatedInstances.value
-            ),
+            "series_instance_count": d_find(s, DICOM_TAG.NumberOfSeriesRelatedInstances.value),
             "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
             "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
         }
@@ -86,33 +88,42 @@ def fetch_study(dicom_study_uid):
         "study_description": study_description,
         "study_modalities": d_find(study, DICOM_TAG.StudyModalities.value),
         "study_accession": d_find(study, DICOM_TAG.AccessionNumber.value),
-        "study_series": series
+        "study_series": series,
     }
 
     return cachable
 
 
-def d_query_instance(instance_id):
+def _query_pacs(url, log_ctx, params=None):
+    """GET a PACS endpoint and return parsed JSON, or None (logged) on timeout/failure."""
     try:
         response = requests.get(
-            url=f"{DCM4CHEE_BASEURL}/rs/instances",
-            headers={
-                "Accept": "application/json",
-            },
-            params={"SOPInstanceUID": instance_id},
+            url=url,
+            headers={"Accept": "application/json"},
+            params=params,
             timeout=get_pacs_query_timeout(),
         )
     except requests.Timeout:
+        logger.warning("PACS query timeout for %s", log_ctx)
         return None
 
     if not response.ok:
+        logger.warning("PACS query failed for %s: status=%s", log_ctx, response.status_code)
         return None
 
     try:
-        data = response.json()
+        return response.json()
     except ValueError:
+        logger.warning("PACS returned invalid JSON for %s", log_ctx)
         return None
 
+
+def d_query_instance(instance_id):
+    data = _query_pacs(
+        f"{DCM4CHEE_BASEURL}/rs/instances",
+        f"instance {instance_id}",
+        params={"SOPInstanceUID": instance_id},
+    )
     if isinstance(data, list) and data:
         return data[0]
 
@@ -120,60 +131,26 @@ def d_query_instance(instance_id):
 
 
 def d_query_series_for_study(study_id):
-    try:
-        response = requests.get(
-            url=f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series",
-            headers={
-                "Accept": "application/json",
-            },
-            timeout=get_pacs_query_timeout(),
-        )
-    except requests.Timeout:
-        return None
-
-    if not response.ok:
-        return None
-
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-
-    if data:
-        return data
-    else:
-        return None
+    data = _query_pacs(f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series", f"study {study_id} series")
+    return data or None
 
 
 def d_query_study(study_uid):
-    try:
-        response = requests.get(
-            url=f"{DCM4CHEE_BASEURL}/rs/studies",
-            headers={
-                "Accept": "application/json",
-            },
-            params={
-                "StudyInstanceUID": study_uid,
-                "includefield": ",".join([
+    data = _query_pacs(
+        f"{DCM4CHEE_BASEURL}/rs/studies",
+        f"study {study_uid}",
+        params={
+            "StudyInstanceUID": study_uid,
+            "includefield": ",".join(
+                [
                     DICOM_TAG.StudyDescription.value,
                     DICOM_TAG.StudyModalities.value,
                     DICOM_TAG.StudyDate.value,
                     DICOM_TAG.StudyTime.value,
-                ]),
-            },
-            timeout=get_pacs_query_timeout(),
-        )
-    except requests.Timeout:
-        return None
-
-    if not response.ok:
-        return None
-
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-
+                ]
+            ),
+        },
+    )
     if isinstance(data, list) and data:
         return data[0]
 
@@ -219,6 +196,7 @@ def d_datetime_to_iso(da, tm=None):
         dt = datetime(year, month, day)
 
     return dt.isoformat()
+
 
 def parse_date(date_str):
     if not date_str:

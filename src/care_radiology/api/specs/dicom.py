@@ -15,3 +15,10 @@ class DicomStudiesQuerySpec(BaseModel):
         if not self.encounter_id and not self.service_request_id:
             raise ValueError("Either encounterId or serviceRequestId is required")
         return self
+
+
+class DicomWorklistQuerySpec(BaseModel):
+    modality: str | None = None
+    from_date: str | None = Field(None, alias="from")
+    to_date: str | None = Field(None, alias="to")
+    facility_id: UUID4 = Field(alias="facility")
