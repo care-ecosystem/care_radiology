@@ -9,6 +9,7 @@ from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
 from django.db.models import Q
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -43,7 +44,7 @@ class DicomViewSet(ViewSet):
     # A dummy API for JWT verification called by nginx-proxy for dicomweb requests
     @action(detail=False, methods=["get"], url_path="authenticate")
     def authenticate(self, _):
-        return Response(status=200)
+        return Response(status=status.HTTP_200_OK)
 
     @action(
         detail=False,
@@ -56,28 +57,30 @@ class DicomViewSet(ViewSet):
         modality = request.query_params.get("modality", None)
         from_date = parse_date(request.query_params.get("from"))
         to_date = parse_date(request.query_params.get("to"))
-        facility = request.query_params.get("facility")
+        facility_external_id = request.query_params.get("facility")
+        facility = get_object_or_404(Facility, external_id=facility_external_id) if facility_external_id else None
 
         results = get_service_requests(
             modality=modality,
             from_date=from_date,
             to_date=to_date,
+            facility=facility,
             limit=1000,
         )
 
-        return Response(data={"status": "success", "results": results}, status=200)
+        return Response(data={"status": "success", "results": results}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
         facility_id = request.data.get("facility_id")
         if not facility_id:
-            return Response({"detail": "facility_id is required"}, status=400)
+            return Response({"detail": "facility_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         facility = get_object_or_404(Facility, external_id=facility_id)
         dcm_file = request.FILES.get("file")
 
-        if not AuthorizationController.call("can_write_patient_obj", self.request.user, patient):
+        if not AuthorizationController.call("can_write_patient_obj", request.user, patient):
             raise PermissionDenied("You do not have permission to upload DICOM for this patient")
         self._authorize_write_radiology_data(facility)
 
@@ -88,7 +91,7 @@ class DicomViewSet(ViewSet):
                     "message": "DICOM files uploaded to DCM4CHE successfully",
                     **result,
                 },
-                status=201,
+                status=status.HTTP_201_CREATED,
             )
         except DicomUploadError as e:
             return Response(
@@ -115,7 +118,7 @@ class DicomViewSet(ViewSet):
                     "message": "DICOM files uploaded to DCM4CHE successfully",
                     **result,
                 },
-                status=201,
+                status=status.HTTP_201_CREATED,
             )
         except DicomUploadError as e:
             return Response(
@@ -131,10 +134,13 @@ class DicomViewSet(ViewSet):
         study_uid = request.data.get("study_uid")
 
         if not service_request_id or not study_uid:
-            return Response({"detail": "service_request_id and study_uid are required"}, status=400)
+            return Response(
+                {"detail": "service_request_id and study_uid are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
-        if not AuthorizationController.call("can_write_service_request", self.request.user, service_request):
+        if not AuthorizationController.call("can_write_service_request", request.user, service_request):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(service_request.facility)
 
@@ -145,7 +151,7 @@ class DicomViewSet(ViewSet):
                 "detail": "Service request linked to study successfully",
                 "record": record,
             },
-            status=200,
+            status=status.HTTP_200_OK,
         )
 
     def _studies_for_encounter(self, encounter_external_id):
@@ -187,7 +193,7 @@ class DicomViewSet(ViewSet):
         if not encounter_external_id and not service_request_external_id:
             return Response(
                 {"detail": "Either encounterId or serviceRequestId is required"},
-                status=400,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if service_request_external_id:
@@ -203,7 +209,7 @@ class DicomViewSet(ViewSet):
                 if result is not None:
                     results.append(result)
 
-        return Response(results, status=200)
+        return Response(results, status=status.HTTP_200_OK)
 
 
 def get_service_requests(
@@ -211,9 +217,13 @@ def get_service_requests(
     from_date=None,
     to_date=None,
     modality=None,
+    facility=None,
     limit=1000,
 ):
     filters = Q(status="active", deleted=False)
+
+    if facility:
+        filters &= Q(facility=facility)
 
     if modality:
         device_location_ids = Device.objects.filter(registered_name__iexact=modality).values_list(
@@ -228,10 +238,11 @@ def get_service_requests(
         filters &= Q(created_date__lte=to_date)
 
     logger.info(
-        "Service Request filters - modality=%s, from_date=%s, to_date=%s",
+        "Service Request filters - modality=%s, from_date=%s, to_date=%s, facility=%s",
         modality,
         from_date,
         to_date,
+        facility.external_id if facility else None,
     )
 
     qs = ServiceRequest.objects.filter(filters).select_related(

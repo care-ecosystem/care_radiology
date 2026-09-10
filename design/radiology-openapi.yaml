@@ -95,7 +95,10 @@ paths:
             example: "2026-06-12"
         - name: facility
           in: query
-          description: Facility external_id (UUID)
+          description: |
+            Facility external_id (UUID). Optional — when given, results are narrowed to
+            service requests belonging to that facility. When omitted, active service
+            requests across all facilities are returned.
           schema:
             type: string
             format: uuid
@@ -116,6 +119,14 @@ paths:
                       $ref: '#/components/schemas/WorklistEntry'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The given facility does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "No Facility matches the given query."
 
   /api/care_radiology/dicom/upload-dicom-external/:
     post:
