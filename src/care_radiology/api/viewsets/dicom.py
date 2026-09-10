@@ -23,6 +23,7 @@ from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
 )
+from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.services.dicom_service import (
     DicomUploadError,
     fetch_study,
@@ -79,12 +80,20 @@ class DicomViewSet(ViewSet):
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
         facility_id = request.data.get("facility_id")
+        dcm_file = request.FILES.get("file")
+
+        errors = {}
         if not facility_id:
-            raise ValidationError({"facility_id": "This value is required"})
+            errors["facility_id"] = "This value is required"
+        if not dcm_file:
+            errors["file"] = "This value is required"
+        elif not dcm_file.name.lower().endswith(DICOM_FILE_EXTENSIONS):
+            errors["file"] = "Only .dcm and .dicom files are supported"
+        if errors:
+            raise ValidationError(errors)
 
         patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         facility = get_object_or_404(Facility, external_id=facility_id)
-        dcm_file = request.FILES.get("file")
 
         if not AuthorizationController.call("can_write_patient_obj", request.user, patient):
             raise PermissionDenied("You do not have permission to upload DICOM for this patient")
@@ -114,8 +123,11 @@ class DicomViewSet(ViewSet):
         permission_classes=[StaticAPIKeyAuthorization],
     )
     def upload_with_key(self, request):
-        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
         dcm_file = request.FILES.get("file")
+        if not dcm_file:
+            raise ValidationError({"file": "This value is required"})
+
+        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
 
         try:
             result = upload_dicom_file(patient, dcm_file)
@@ -137,7 +149,7 @@ class DicomViewSet(ViewSet):
     @extend_schema(request=DicomStudyLinkSpec)
     @action(detail=False, methods=["post"], url_path="link-service-request")
     def link_service_request(self, request):
-        request_data = DicomStudyLinkSpec(**request.data)
+        request_data = DicomStudyLinkSpec.model_validate(request.data)
 
         service_request = get_object_or_404(ServiceRequest, external_id=request_data.service_request_id)
         if not AuthorizationController.call("can_write_service_request", request.user, service_request):

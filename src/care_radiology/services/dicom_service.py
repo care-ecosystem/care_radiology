@@ -32,20 +32,9 @@ class WebhookConflictError(Exception):
         self.message = message
 
 
-def validate_dcm_file(dcm_file):
+def upload_dicom_file(patient, dcm_file):
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
-
-    if not (dcm_file.name or "").lower().endswith((".dcm", ".dicom")):
-        raise DicomUploadError(
-            "Only .dcm and .dicom files are supported",
-            status_code=400,
-            extra={"filename": dcm_file.name},
-        )
-
-
-def upload_dicom_file(patient, dcm_file):
-    validate_dcm_file(dcm_file)
 
     try:
         body, content_type = encode_file_multipart_related(dcm_file)

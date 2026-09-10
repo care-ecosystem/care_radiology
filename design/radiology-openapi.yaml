@@ -136,8 +136,8 @@ paths:
         - DICOM Studies
       summary: Upload DICOM file (external / static API key)
       description: |
-        Upload a DICOM (.dcm) file for a patient using a static API key instead of
-        user JWT auth. Intended for machine-to-machine use (e.g. modality worklist
+        Upload a DICOM file for a patient using a static API key instead of user JWT auth.
+        Any filename is accepted here — see the `file` field. Intended for machine-to-machine use (e.g. modality worklist
         server, HIS integration). The file is forwarded to DCM4CHEE and a `DicomStudy`
         record is created or updated in CARE.
 
@@ -163,7 +163,9 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
+                  description: |
+                    DICOM file. Any filename is accepted — validity is determined by DCM4CHEE, not
+                    by the extension.
       responses:
         '201':
           description: DICOM file uploaded and study record created/updated
@@ -182,23 +184,19 @@ paths:
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: No file provided, or the file is not a `.dcm` / `.dicom`
+          description: |
+            No file provided. The filename is deliberately not checked on this endpoint — machine
+            callers post parts named by SOP Instance UID — so unparseable bytes surface as the 502
+            below, from DCM4CHEE.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              examples:
-                no_file:
-                  value:
-                    errors:
-                      - type: "dicom_upload_error"
-                        msg: "No file provided"
-                bad_extension:
-                  value:
-                    errors:
-                      - type: "dicom_upload_error"
-                        msg: "Only .dcm and .dicom files are supported"
-                        filename: "study.png"
+              example:
+                errors:
+                  - type: "validation_error"
+                    msg:
+                      file: ["This value is required"]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -263,7 +261,7 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: "DICOM files uploaded to Orthanc successfully"
+                    example: "DICOM files uploaded to DCM4CHE successfully"
                   study_uid:
                     type: string
                     description: DICOM Study Instance UID
@@ -277,23 +275,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
               examples:
-                no_file:
-                  value:
-                    errors:
-                      - type: "dicom_upload_error"
-                        msg: "No file provided"
-                bad_extension:
-                  value:
-                    errors:
-                      - type: "dicom_upload_error"
-                        msg: "Only .dcm and .dicom files are supported"
-                        filename: "study.png"
-                no_facility:
+                missing_fields:
                   value:
                     errors:
                       - type: "validation_error"
                         msg:
+                          file: ["This value is required"]
                           facility_id: ["This value is required"]
+                bad_extension:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          file: ["Only .dcm and .dicom files are supported"]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -397,8 +391,8 @@ paths:
         date, description, modalities, series) from DCM4CHEE in parallel threads. Studies not
         found in DCM4CHEE are omitted from the response.
 
-        Exactly one of `encounterId` or `serviceRequestId` must be provided; if both are
-        given, `serviceRequestId` wins.
+        At least one of `encounterId` or `serviceRequestId` must be provided; if both are
+        given, `serviceRequestId` wins and `encounterId` is ignored.
 
         If `encounterId` is given: requires `can_view_encounter_obj` permission on the
         encounter, plus `can_read_radiology_data` permission on the encounter's facility.
@@ -444,7 +438,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 errors:
                   - type: "value_error"
@@ -646,9 +640,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                facility: "This value is required"
+                errors:
+                  - type: "validation_error"
+                    msg:
+                      facility: ["This value is required"]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -694,14 +691,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '409':
-          description: Conflict — a template with this title already exists for this facility
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                title: "A template with this title already exists for this facility"
 
   /api/care_radiology/observation_template/{id}/:
     get:
@@ -748,22 +737,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ObservationTemplate'
-        '400':
-          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          description: Conflict — a template with this title already exists for this facility
+        '400':
+          description: |
+            Validation failed, including a duplicate `title` for the facility — `perform_update`
+            catches the `IntegrityError` and re-raises it as a field error, so this is a 400 and
+            not a 409.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                title: "A template with this title already exists for this facility"
+                errors:
+                  - type: "validation_error"
+                    msg:
+                      title: ["A template with this title already exists for this facility"]
 
 components:
   securitySchemes:
