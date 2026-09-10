@@ -185,9 +185,9 @@ paths:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
           description: |
-            No file provided. The filename is deliberately not checked on this endpoint — machine
-            callers post parts named by SOP Instance UID — so unparseable bytes surface as the 502
-            below, from DCM4CHEE.
+            No file or patient_id provided. The filename is deliberately not checked on this
+            endpoint — machine callers post parts named by SOP Instance UID — so unparseable
+            bytes surface as the 502 below, from DCM4CHEE.
           content:
             application/json:
               schema:
@@ -197,6 +197,7 @@ paths:
                   - type: "validation_error"
                     msg:
                       file: ["This value is required"]
+                      patient_id: ["This value is required"]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -269,7 +270,7 @@ paths:
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: No file provided, file is not a `.dcm` / `.dicom`, or facility_id missing
+          description: No file, patient_id, or facility_id provided, or file is not a `.dcm` / `.dicom`
           content:
             application/json:
               schema:
@@ -282,6 +283,7 @@ paths:
                         msg:
                           file: ["This value is required"]
                           facility_id: ["This value is required"]
+                          patient_id: ["This value is required"]
                 bad_extension:
                   value:
                     errors:
