@@ -88,11 +88,14 @@ class DicomViewSet(ViewSet):
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
         facility_id = request.data.get("facility_id")
+        patient_id = request.data.get("patient_id")
         dcm_file = request.FILES.get("file")
 
         errors = {}
         if not facility_id:
             errors["facility_id"] = "This value is required"
+        if not patient_id:
+            errors["patient_id"] = "This value is required"
         if not dcm_file:
             errors["file"] = "This value is required"
         elif not dcm_file.name.lower().endswith(DICOM_FILE_EXTENSIONS):
@@ -100,7 +103,7 @@ class DicomViewSet(ViewSet):
         if errors:
             raise ValidationError(errors)
 
-        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
+        patient = get_object_or_404(Patient, external_id=patient_id)
         facility = get_object_or_404(Facility, external_id=facility_id)
 
         if not AuthorizationController.call("can_write_patient_obj", request.user, patient):
@@ -119,10 +122,17 @@ class DicomViewSet(ViewSet):
     )
     def upload_with_key(self, request):
         dcm_file = request.FILES.get("file")
-        if not dcm_file:
-            raise ValidationError({"file": "This value is required"})
+        patient_id = request.data.get("patient_id")
 
-        patient = get_object_or_404(Patient, external_id=request.data.get("patient_id"))
+        errors = {}
+        if not dcm_file:
+            errors["file"] = "This value is required"
+        if not patient_id:
+            errors["patient_id"] = "This value is required"
+        if errors:
+            raise ValidationError(errors)
+
+        patient = get_object_or_404(Patient, external_id=patient_id)
 
         return self._handle_dicom_upload(patient, dcm_file)
 
