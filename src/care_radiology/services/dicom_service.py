@@ -1,11 +1,13 @@
-import requests
+import logging
 
+import requests
+from care.emr.models.service_request import ServiceRequest
 from django.core.cache import cache
 
-from care.emr.models.service_request import ServiceRequest
 from care_radiology.constants import DCM4CHEE_BASEURL, DICOM_STUDY_CACHE_KEY_TEMPLATE
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.settings import plugin_settings
 from care_radiology.utils.dicom import (
     DICOM_TAG,
     d_datetime_to_iso,
@@ -15,7 +17,8 @@ from care_radiology.utils.dicom import (
     d_query_study,
     encode_file_multipart_related,
 )
-from care_radiology.settings import plugin_settings
+
+logger = logging.getLogger(__name__)
 
 
 class DicomUploadError(Exception):
@@ -66,13 +69,9 @@ def upload_dicom_file(patient, dcm_file):
                 extra={"status_code": upload_response.status_code},
             )
 
-        referenced_sop = d_find(
-            upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value
-        )[0]
+        referenced_sop = d_find(upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value)[0]
 
-        instance_uid = d_find(
-            referenced_sop, DICOM_TAG.ReferencedInstanceUID.value
-        )[0]
+        instance_uid = d_find(referenced_sop, DICOM_TAG.ReferencedInstanceUID.value)[0]
 
         instance_data = d_query_instance(instance_uid)
         if instance_data is None:
@@ -109,9 +108,8 @@ def upload_dicom_file(patient, dcm_file):
     except DicomUploadError:
         raise
     except Exception as e:
-        raise DicomUploadError(
-            "Exception occurred", status_code=500, extra={"details": str(e)}
-        )
+        logger.exception("Unexpected error during DICOM upload")
+        raise DicomUploadError("Exception occurred", status_code=500, extra={"details": str(e)})
 
 
 def link_service_request_to_study(service_request, study_uid, raw_data=None):
@@ -152,9 +150,7 @@ def process_study_webhook(data):
     elif data.get("patient_id") and data.get("study_id"):
         from care.emr.models.patient import Patient
 
-        patient = Patient.objects.filter(
-            instance_identifiers__contains=[{"value": data.get("patient_id")}]
-        ).first()
+        patient = Patient.objects.filter(instance_identifiers__contains=[{"value": data.get("patient_id")}]).first()
         if not patient:
             raise WebhookConflictError("No matching patient")
 
@@ -187,17 +183,19 @@ def fetch_study(dicom_study):
     if study is None:
         return None
 
+    series_data = d_query_series_for_study(study_uid)
+    if series_data is None:
+        return None
+
     series = [
         {
             "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
             "series_number": d_find(s, DICOM_TAG.SeriesNumber.value),
-            "series_instance_count": d_find(
-                s, DICOM_TAG.NumberOfSeriesRelatedInstances.value
-            ),
+            "series_instance_count": d_find(s, DICOM_TAG.NumberOfSeriesRelatedInstances.value),
             "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
             "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
         }
-        for s in d_query_series_for_study(study_uid)
+        for s in series_data
     ]
 
     study_description = (
