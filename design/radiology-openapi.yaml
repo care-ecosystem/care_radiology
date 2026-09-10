@@ -150,7 +150,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: DICOM (.dcm) file
+                  description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
       responses:
         '201':
           description: DICOM file uploaded and study record created/updated
@@ -169,13 +169,19 @@ paths:
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: No file provided
+          description: No file provided, or the file is not a `.dcm` / `.dicom`
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                error: "No file provided"
+              examples:
+                no_file:
+                  value:
+                    error: "No file provided"
+                bad_extension:
+                  value:
+                    error: "Only .dcm and .dicom files are supported"
+                    filename: "study.png"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '502':
@@ -225,7 +231,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: DICOM (.dcm) file
+                  description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
       responses:
         '201':
           description: DICOM file uploaded and study record created/updated
@@ -244,7 +250,7 @@ paths:
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
         '400':
-          description: No file provided, or facility_id missing
+          description: No file provided, file is not a `.dcm` / `.dicom`, or facility_id missing
           content:
             application/json:
               schema:
@@ -253,6 +259,10 @@ paths:
                 no_file:
                   value:
                     error: "No file provided"
+                bad_extension:
+                  value:
+                    error: "Only .dcm and .dicom files are supported"
+                    filename: "study.png"
                 no_facility:
                   value:
                     detail: "facility_id is required"
@@ -1116,6 +1126,9 @@ components:
           description: Field-level validation errors
           example:
             title: ["This field is required"]
+        filename:
+          type: string
+          description: Name of the rejected upload (returned with file-extension validation errors)
 
   responses:
     BadRequest:

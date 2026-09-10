@@ -156,7 +156,9 @@ class DicomViewSet(ViewSet):
         self._authorize_read_radiology_data(encounter.facility)
 
         radiology_service_requests = RadiologyServiceRequest.objects.filter(
-            service_request__encounter__external_id=encounter_external_id,
+            service_request__encounter=encounter,
+            service_request__deleted=False,
+            dicom_study__deleted=False,
             dicom_study__dicom_study_uid__isnull=False,
         ).select_related("dicom_study")
 
@@ -170,7 +172,8 @@ class DicomViewSet(ViewSet):
         self._authorize_read_radiology_data(service_request.facility)
 
         radiology_service_requests = RadiologyServiceRequest.objects.filter(
-            service_request__external_id=service_request_external_id,
+            service_request=service_request,
+            dicom_study__deleted=False,
             dicom_study__dicom_study_uid__isnull=False,
         ).select_related("dicom_study")
 
