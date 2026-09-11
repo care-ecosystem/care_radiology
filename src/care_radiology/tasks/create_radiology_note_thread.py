@@ -1,18 +1,35 @@
+import logging
 import re
-
-from celery import shared_task
-from django.db import transaction
-from django.utils import timezone
 
 from care.emr.models.notes import NoteMessage, NoteThread
 from care.emr.models.service_request import ServiceRequest
+from celery import shared_task
+from django.db import connection, transaction
+from django.utils import timezone
 
-import logging
+from care_radiology.models.accession_sequence import AccessionSequence
 
 logger = logging.getLogger(__name__)
 
 def _normalized_value(value: str, length: int = 3) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", value).upper()[:length]
+
+
+def _next_accession_sequence(facility, modality_code, year):
+    # Atomic upsert - Postgres row lock on the ON CONFLICT branch prevents concurrent collisions.
+    table = AccessionSequence._meta.db_table  # noqa: SLF001
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            INSERT INTO {table} (facility_id, modality_code, year, last_value)
+            VALUES (%s, %s, %s, 1)
+            ON CONFLICT (facility_id, modality_code, year)
+            DO UPDATE SET last_value = {table}.last_value + 1
+            RETURNING last_value
+            """,  # noqa: S608
+            [facility.pk, modality_code, year],
+        )
+        return cursor.fetchone()[0]
 
 
 def generate_accession_number(service_request):
@@ -22,22 +39,13 @@ def generate_accession_number(service_request):
     facility = service_request.facility
     modality = service_request.code or {}
 
-    facility_code = _normalized_value(facility.name if facility else "")
-    modality_code = _normalized_value(modality.get("display") or "")
+    facility_code = _normalized_value(facility.name)
+    modality_code = (modality.get("code") or "")[:100]
+    modality_display_code = _normalized_value(modality.get("display") or "")
 
-    with transaction.atomic():
-        incremental_identifier = (
-            ServiceRequest.objects.filter(
-                facility=facility,
-                created_date__year=year,
-                code__code=modality.get("code"),
-            ).count()
-            + 1
-        )
+    incremental_identifier = _next_accession_sequence(facility, modality_code, year)
 
-    return (
-        f"AC{facility_code}{modality_code}{year_suffix}{incremental_identifier:06d}"
-    )
+    return f"AC{facility_code}{modality_display_code}{year_suffix}{incremental_identifier:06d}"
 
 
 @shared_task
@@ -56,9 +64,10 @@ def create_radiology_note_thread(service_request_id: str):
 
         accession_number = service_request.meta.get("accession_number")
         if not accession_number:
-            accession_number = generate_accession_number(service_request)
-            service_request.meta["accession_number"] = accession_number
-            service_request.save(update_fields=["meta"])
+            with transaction.atomic():
+                accession_number = generate_accession_number(service_request)
+                service_request.meta["accession_number"] = accession_number
+                service_request.save(update_fields=["meta"])
 
         note_thread, _ = NoteThread.objects.get_or_create(
             title=f"Radiology - {accession_number}",
