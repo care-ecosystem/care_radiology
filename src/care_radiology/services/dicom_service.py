@@ -143,17 +143,17 @@ def process_study_webhook(data):
                 sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
             elif data.get("accession_number"):
                 # Priority 2: Lookup by accession_number in meta JSON field
-                sr = ServiceRequest.objects.get(meta__accession_number=data["accession_number"])
+
                 # If accession_number is duplicated across ServiceRequests, ignore older
                 # ones and use the most recently created match instead of failing:
-                # sr = (
-                #     ServiceRequest.objects
-                #     .filter(meta__accession_number=data["accession_number"])
-                #     .order_by("-created_date")
-                #     .first()
-                # )
-                # if sr is None:
-                #     raise ServiceRequest.DoesNotExist
+                sr = (
+                    ServiceRequest.objects
+                    .filter(meta__accession_number=data["accession_number"])
+                    .order_by("-created_date")
+                    .first()
+                )
+                if sr is None:
+                    raise ServiceRequest.DoesNotExist
             else:
                 raise WebhookConflictError("No service_request_id or accession_number provided")
         except ServiceRequest.DoesNotExist:
