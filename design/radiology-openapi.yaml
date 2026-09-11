@@ -510,13 +510,27 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookStudyResponse'
         '400':
-          description: Invalid JSON payload or missing required fields
+          description: |
+            Payload failed validation against `WebhookStudySpec` — missing `study_id`, or none
+            of `service_request_id` / `accession_number` / `patient_id` given. A malformed JSON
+            body (unparseable syntax) instead returns DRF's default `{"detail": ...}` shape —
+            see the `Error` schema.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                detail: "Invalid JSON payload"
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_study_id:
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["study_id"]
+                        msg: "Field required"
+                missing_lookup_identifier:
+                  value:
+                    errors:
+                      - type: "value_error"
+                        msg: "Value error, One of service_request_id, accession_number or patient_id is required"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
@@ -569,13 +583,34 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookStatusResponse'
         '400':
-          description: Missing required fields, facility not found, or no matching tag configuration
+          description: |
+            Payload failed validation against `WebhookMppsSpec` (missing/invalid
+            `service_request_id` or `study_status`), or a business rule failed: the service
+            request's facility is missing, or no `TagConfig.display` matches `study_status`
+            for that facility.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                detail: "Tag configuration not found for status: SCAN_STARTED"
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_fields:
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["study_status"]
+                        msg: "Field required"
+                tag_not_found:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          study_status: "Tag configuration not found for status: SCAN_STARTED"
+                facility_not_found:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          service_request_id: "Facility not found for service request"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -583,11 +618,22 @@ paths:
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No ServiceRequest matches the given query."
+        '500':
+          description: |
+            Unexpected database error while fetching the tag configuration or saving the
+            updated `ServiceRequest.tags`. Raised as a plain DRF `APIException`, so this uses
+            the `Error` schema, not `ErrorEnvelope`.
+          content:
+            application/json:
+              schema:
                 $ref: '#/components/schemas/Error'
               example:
-                detail: "Service request not found: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
-        '500':
-          $ref: '#/components/responses/InternalServerError'
+                detail: "Error updating tags: <exception message>"
 
   # ---------- Observation Templates ----------
   /api/care_radiology/observation_template/:
@@ -960,6 +1006,8 @@ components:
         One of (service_request_id + study_id), (accession_number + study_id), or
         (patient_id + study_id) must be present.
         Additional fields in the payload are stored verbatim in RadiologyWebhookLogs.
+      required:
+        - study_id
       properties:
         service_request_id:
           type: string
