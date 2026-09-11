@@ -1,8 +1,6 @@
 import logging
 
 from care.emr.api.viewsets.base import emr_exception_handler
-from care.emr.models.service_request import ServiceRequest
-from care.utils.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
@@ -62,16 +60,13 @@ class WebhookViewSet(ViewSet):
         permission_classes=[StaticAPIKeyAuthorization],
     )
     def handle_mpps(self, request):
-        logger.info("[MPPS] Webhook received!")
+        logger.info("[MPPS] Webhook received")
         request_data = WebhookMppsSpec.model_validate(request.data)
         logger.info("[MPPS] Extracted - SR: %s, Status: %s", request_data.service_request_id, request_data.study_status)
 
         RadiologyWebhookLogs.objects.create(raw_data=request.data, type="MPPS")
         logger.info("[MPPS] Webhook logged to database")
 
-        service_request = get_object_or_404(ServiceRequest, external_id=request_data.service_request_id)
-        logger.info("[MPPS] ServiceRequest found: %s", service_request.id)
-
-        record = process_mpps_webhook(service_request, request_data.study_status)
+        record = process_mpps_webhook(request_data.service_request_id, request_data.study_status)
 
         return Response(record, status=status.HTTP_200_OK)
