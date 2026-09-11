@@ -1,14 +1,15 @@
 import logging
 
+from care.emr.api.viewsets.base import emr_exception_handler
 from care.emr.models.service_request import ServiceRequest
-from care.emr.models.tag_config import TagConfig
+from care.utils.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ParseError
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
-from care_radiology.constants import VALID_MPPS_STATUSES
+from care_radiology.api.specs.webhooks import WebhookMppsSpec, WebhookStudySpec
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
@@ -16,6 +17,7 @@ from care_radiology.security.authentication import (
 )
 from care_radiology.services.dicom_service import (
     WebhookConflictError,
+    process_mpps_webhook,
     process_study_webhook,
 )
 
@@ -23,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 class WebhookViewSet(ViewSet):
+    def get_exception_handler(self):
+        return emr_exception_handler
+
+    # DICOM study completion webhook, links an uploaded study to a service request.
+    @extend_schema(request=WebhookStudySpec)
     @action(
         detail=False,
         methods=["post"],
@@ -31,230 +38,40 @@ class WebhookViewSet(ViewSet):
         permission_classes=[StaticAPIKeyAuthorization],
     )
     def save_webhook(self, request):
-        """
-        Handle DICOM study completion webhook from DICOM Enabler.
-
-        Links uploaded DICOM studies to CARE service requests.
-
-        Expected Payload Options:
-
-        Option 1: Lookup by service_request_id (Priority 1)
-        {
-            "service_request_id": "uuid-of-service-request",
-            "study_id": "DICOM Study Instance UID",
-            "series_count": 3,
-            "instance_count": 120
-        }
-
-        Option 2: Lookup by accession_number (Priority 2)
-        {
-            "accession_number": "ACJAYCTO26000004",
-            "study_id": "DICOM Study Instance UID",
-            "series_count": 3,
-            "instance_count": 120
-        }
-
-        Option 3: Lookup by patient_id (Fallback)
-        {
-            "patient_id": "patient-identifier",
-            "study_id": "DICOM Study Instance UID"
-        }
-
-        Service Request Lookup Priority:
-        1. service_request_id (ServiceRequest.external_id) - Direct UUID lookup
-        2. accession_number (ServiceRequest.meta.accession_number) - JSON field query
-        3. patient_id (Patient.instance_identifiers) - Creates study without SR link
-
-        Authentication:
-        - Requires CARE_RADIOLOGY_WEBHOOK_SECRET in Authorization header
-
-        Returns:
-            200: Study linked successfully with record details
-            400: Invalid JSON payload or missing required fields
-            401: Invalid API key
-            409: Service request or patient not found (conflict)
-        """
-        try:
-            data = request.data
-        except ParseError:
-            return Response(
-                {"detail": "Invalid JSON payload"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+        data = request.data
         RadiologyWebhookLogs.objects.create(raw_data=data, type="SR-STUDY-INSERT")
-        if not isinstance(data, dict):
-            return Response(
-                {"detail": "JSON object expected"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        WebhookStudySpec.model_validate(data)
 
         try:
             record = process_study_webhook(data)
         except WebhookConflictError as e:
-            return Response(
-                {"detail": e.message},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        if record is not None:
-            return Response(
-                {
-                    "detail": "Webhook received and saved successfully",
-                    "record": record,
-                },
-                status=status.HTTP_200_OK,
-            )
+            return Response({"detail": e.message}, status=status.HTTP_409_CONFLICT)
 
         return Response(
-            {
-                "detail": "Webhook received and saved successfully",
-            },
+            {"detail": "Webhook received and saved successfully", **({"record": record} if record is not None else {})},
             status=status.HTTP_200_OK,
         )
 
+    # MPPS status update, mapped to a ServiceRequest tag.
+    @extend_schema(request=WebhookMppsSpec)
     @action(
         detail=False,
         methods=["post"],
         url_path="status",
         authentication_classes=[StaticAPIKeyAuthentication],
-        permission_classes=[StaticAPIKeyAuthorization],  # Need to add throttling & limit based on expected volume
+        permission_classes=[StaticAPIKeyAuthorization],
     )
     def handle_mpps(self, request):
-        """
-        Handle MPPS (Modality Performed Procedure Step) status updates from DICOM enabler.
-
-        MPPS is part of the DICOM standard for tracking the status of imaging procedures.
-        This webhook receives status updates and maps them to CARE ServiceRequest tags.
-
-        Expected Payload:
-        {
-            "service_request_id": "uuid-of-service-request",
-            "study_status": "STARTED" | "COMPLETED" | "DISCONTINUED" | "IN_PROGRESS"
-        }
-
-        Tag Mapping:
-        - Status values must match TagConfig.display values for the facility
-        - Each facility can have custom tag configurations
-        - Tags are appended to ServiceRequest.tags array (duplicates prevented)
-
-        Authentication:
-        - Requires CARE_RADIOLOGY_WEBHOOK_SECRET in Authorization header
-
-        Returns:
-            200: Tag updated successfully or already exists
-            400: Missing fields, invalid facility, or tag config not found
-            401: Invalid API key
-            404: ServiceRequest not found
-            500: Database error
-        """
         logger.info("[MPPS] Webhook received!")
-        try:
-            data = request.data
-            logger.info(f"[MPPS] Received data: {data}")
-        except ParseError:
-            logger.error("[MPPS] Invalid JSON payload")
-            return Response(
-                {"detail": "Invalid JSON payload"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        request_data = WebhookMppsSpec.model_validate(request.data)
+        logger.info("[MPPS] Extracted - SR: %s, Status: %s", request_data.service_request_id, request_data.study_status)
 
-        service_request_id = data.get("service_request_id")
-        study_status = data.get("study_status")
-        logger.info(f"[MPPS] Extracted - SR: {service_request_id}, Status: {study_status}")
-
-        if not service_request_id or not study_status:
-            logger.error("[MPPS] Missing required fields")
-            return Response(
-                {"detail": "Missing required fields: service_request_id, study_status"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if study_status not in VALID_MPPS_STATUSES:
-            logger.warning(f"[MPPS] Unexpected status: {study_status}")
-            # Still process it, but log warning
-
-        RadiologyWebhookLogs.objects.create(raw_data=data, type="MPPS")
+        RadiologyWebhookLogs.objects.create(raw_data=request.data, type="MPPS")
         logger.info("[MPPS] Webhook logged to database")
 
-        try:
-            sr = ServiceRequest.objects.get(external_id=service_request_id)
-            logger.info(f"[MPPS] ServiceRequest found: {sr.id}")
-        except ServiceRequest.DoesNotExist:
-            logger.error(f"[MPPS] ServiceRequest not found: {service_request_id}")
-            return Response(
-                {"detail": f"Service request not found: {service_request_id}"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        service_request = get_object_or_404(ServiceRequest, external_id=request_data.service_request_id)
+        logger.info("[MPPS] ServiceRequest found: %s", service_request.id)
 
-        facility = sr.facility
-        if not facility:
-            logger.error("[MPPS] Facility not found for SR")
-            return Response(
-                {"detail": "Facility not found for service request"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        record = process_mpps_webhook(service_request, request_data.study_status)
 
-        logger.info(f"[MPPS] Facility found: {facility.external_id}")
-        try:
-            tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
-
-            if not tag_config:
-                logger.error(f"[MPPS] Tag not found for status: {study_status}")
-                return Response(
-                    {"detail": f"Tag configuration not found for status: {study_status}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            tag_uuid = tag_config.external_id
-            tag_id = tag_config.id
-            logger.info(f"[MPPS] Tag found: {tag_uuid}")
-        except Exception as e:
-            logger.error(f"[MPPS] Error fetching tag: {str(e)}")
-            return Response(
-                {"detail": f"Error fetching tag configuration: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        try:
-            tags = sr.tags or []
-            logger.info(f"[MPPS] Current tags before update: {tags}")
-
-            if tag_id in tags:
-                logger.warning(f"[MPPS] Tag {tag_id} already exists in SR {service_request_id}, skipping duplicate")
-                return Response(
-                    {
-                        "detail": "Tag already set for this service request",
-                        "service_request_id": service_request_id,
-                        "study_status": study_status,
-                        "tag_id": tag_id,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-
-            tags.append(tag_id)
-            sr.tags = tags
-            sr.save(update_fields=["tags"])
-
-            logger.info(f"[MPPS] Tag {tag_id} appended to ServiceRequest tags")
-            logger.info(f"[MPPS] Updated tags: {sr.tags}")
-
-        except Exception as e:
-            logger.error(f"[MPPS] Error updating tags: {str(e)}")
-            return Response(
-                {"detail": f"Error updating tags: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
-        return Response(
-            {
-                "detail": "MPPS status tag updated successfully",
-                "service_request_id": service_request_id,
-                "study_status": study_status,
-                "tag_id": tag_id,
-                "tag_uuid": str(tag_uuid),
-                "current_tags": sr.tags,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response(record, status=status.HTTP_200_OK)
