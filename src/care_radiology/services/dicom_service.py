@@ -3,7 +3,9 @@ import logging
 import requests
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
+from care.utils.shortcuts import get_object_or_404
 from django.core.cache import cache
+from django.db import transaction
 from rest_framework.exceptions import APIException, ValidationError
 
 from care_radiology.constants import DCM4CHEE_BASEURL, DICOM_STUDY_CACHE_KEY_TEMPLATE, VALID_MPPS_STATUSES
@@ -168,46 +170,51 @@ def process_study_webhook(data):
     return None
 
 
-def process_mpps_webhook(service_request, study_status):
+def process_mpps_webhook(service_request_id, study_status):
     if study_status not in VALID_MPPS_STATUSES:
         logger.warning("[MPPS] Unexpected status: %s", study_status)
 
-    facility = service_request.facility
-    if not facility:
-        logger.error("[MPPS] Facility not found for SR")
-        raise ValidationError({"service_request_id": "Facility not found for service request"})
-    logger.info("[MPPS] Facility found: %s", facility.external_id)
+    with transaction.atomic():
+        service_request = get_object_or_404(ServiceRequest.objects.select_for_update(), external_id=service_request_id)
 
-    try:
-        tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
-    except Exception as e:
-        logger.error("[MPPS] Error fetching tag: %s", str(e))
-        raise APIException(f"Error fetching tag configuration: {e}") from e
+        facility = service_request.facility
+        if not facility:
+            logger.error("[MPPS] Facility not found for SR")
+            raise ValidationError({"service_request_id": "Facility not found for service request"})
+        logger.info("[MPPS] Facility found: %s", facility.external_id)
 
-    if not tag_config:
-        logger.error("[MPPS] Tag not found for status: %s", study_status)
-        raise ValidationError({"study_status": f"Tag configuration not found for status: {study_status}"})
-    logger.info("[MPPS] Tag found: %s", tag_config.external_id)
+        try:
+            tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
+        except Exception as e:
+            logger.exception("[MPPS] Error fetching tag")
+            raise APIException("Error fetching tag configuration") from e
 
-    tags = service_request.tags or []
-    if tag_config.id in tags:
-        logger.warning(
-            "[MPPS] Tag %s already exists in SR %s, skipping duplicate", tag_config.id, service_request.external_id
-        )
-        return {
-            "detail": "Tag already set for this service request",
-            "service_request_id": str(service_request.external_id),
-            "study_status": study_status,
-            "tag_id": tag_config.id,
-        }
+        if not tag_config:
+            logger.error("[MPPS] Tag not found for status: %s", study_status)
+            raise ValidationError({"study_status": f"Tag configuration not found for status: {study_status}"})
+        logger.info("[MPPS] Tag found: %s", tag_config.external_id)
 
-    try:
-        tags.append(tag_config.id)
-        service_request.tags = tags
-        service_request.save(update_fields=["tags"])
-    except Exception as e:
-        logger.error("[MPPS] Error updating tags: %s", str(e))
-        raise APIException(f"Error updating tags: {e}") from e
+        tags = service_request.tags or []
+        if tag_config.id in tags:
+            logger.warning(
+                "[MPPS] Tag %s already exists in SR %s, skipping duplicate",
+                tag_config.id,
+                service_request.external_id,
+            )
+            return {
+                "detail": "Tag already set for this service request",
+                "service_request_id": str(service_request.external_id),
+                "study_status": study_status,
+                "tag_id": tag_config.id,
+            }
+
+        try:
+            tags.append(tag_config.id)
+            service_request.tags = tags
+            service_request.save(update_fields=["tags"])
+        except Exception as e:
+            logger.exception("[MPPS] Error updating tags")
+            raise APIException("Error updating tags") from e
 
     logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
     logger.info("[MPPS] Success! MPPS status tag updated via direct database write")

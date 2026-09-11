@@ -633,7 +633,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
               example:
-                detail: "Error updating tags: <exception message>"
+                detail: "Error updating tags"
 
   # ---------- Observation Templates ----------
   /api/care_radiology/observation_template/:
