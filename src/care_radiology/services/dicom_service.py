@@ -8,9 +8,15 @@ from django.core.cache import cache
 from django.db import transaction
 from rest_framework.exceptions import APIException, ValidationError
 
-from care_radiology.constants import DCM4CHEE_BASEURL, DICOM_STUDY_CACHE_KEY_TEMPLATE, VALID_MPPS_STATUSES
+from care_radiology.constants import (
+    DCM4CHEE_BASEURL,
+    DICOM_STUDY_CACHE_KEY_TEMPLATE,
+    MPPS_STATUS_DISCONTINUED,
+    MPPS_STATUS_SCAN_STARTED,
+    VALID_MPPS_STATUSES,
+)
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.models.radiology_service_request import RadiologyServiceRequest, RadiologyServiceRequestStatus
 from care_radiology.settings import plugin_settings
 from care_radiology.utils.dicom import (
     DICOM_TAG,
@@ -138,9 +144,14 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
             study.radiology_service_request = rsr
             study.save(update_fields=["radiology_service_request"])
 
+        if rsr.status != RadiologyServiceRequestStatus.CANCELLED:
+            rsr.status = RadiologyServiceRequestStatus.COMPLETED
+            rsr.save(update_fields=["status"])
+
     return {
         "external_id": rsr.external_id,
         "data": rsr.raw_data,
+        "status": rsr.status,
     }
 
 
@@ -234,6 +245,18 @@ def process_mpps_webhook(service_request_id, study_status):
         except Exception as e:
             logger.exception("[MPPS] Error updating tags")
             raise APIException("Error updating tags") from e
+
+        if study_status == MPPS_STATUS_SCAN_STARTED:
+            rsr_status = RadiologyServiceRequestStatus.IN_PROGRESS
+        elif study_status == MPPS_STATUS_DISCONTINUED:
+            rsr_status = RadiologyServiceRequestStatus.CANCELLED
+        else:
+            rsr_status = None
+
+        if rsr_status:
+            RadiologyServiceRequest.objects.filter(service_request=service_request).exclude(
+                status__in=[RadiologyServiceRequestStatus.COMPLETED, RadiologyServiceRequestStatus.CANCELLED]
+            ).update(status=rsr_status)
 
     logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
     logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
