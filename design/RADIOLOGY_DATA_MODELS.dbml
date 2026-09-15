@@ -1,0 +1,207 @@
+// CARE Radiology Data Models - DICOM Integration Plugin
+// Foreign keys use integer id; external_id UUID for API exposure
+
+// ============================================================================
+// RADIOLOGY SERVICE REQUEST - Service Request Linkage (1:1 relationship)
+// Links a CARE ServiceRequest to radiology-specific metadata and DICOM studies
+// ============================================================================
+Table radiology_servicerequest {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null, note: 'Exposed via API as id']
+  service_request_id INTEGER [null, unique, note: 'FK to emr.ServiceRequest.id (1:1, nullable). ON DELETE CASCADE']
+
+  raw_data JSON [default: '{}', note: 'Raw service request data from external source']
+
+  created_date TIMESTAMP [not null, note: "indexed"]
+  modified_date TIMESTAMP [not null, note: "indexed"]
+  deleted BOOLEAN [default: false, note: "indexed"]
+
+  created_by_id INTEGER [null, note: 'FK to care_user.id - who created']
+  updated_by_id INTEGER [null, note: 'FK to care_user.id - who last updated']
+
+  history JSON [default: '{}', note: 'Change tracking history']
+  meta JSON [default: 'null', null, note: 'Arbitrary metadata']
+
+  indexes {
+    service_request_id
+    deleted
+  }
+}
+
+Ref service_request_fk: radiology_servicerequest.service_request_id ?> emr_servicerequest.id
+Ref service_request_created_by: radiology_servicerequest.created_by_id ?> care_user.id
+Ref service_request_updated_by: radiology_servicerequest.updated_by_id ?> care_user.id
+
+// ============================================================================
+// DICOM STUDY - DICOM Study Records (N:1 relationship)
+// Represents a single DICOM study linked to a patient and service request
+// ============================================================================
+Table radiology_dicomstudy {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null, note: 'Exposed via API as id']
+  patient_id INTEGER [not null, note: 'FK to emr.Patient.id. ON DELETE CASCADE']
+  radiology_service_request_id INTEGER [null, note: 'FK to radiology_servicerequest.id. ON DELETE CASCADE']
+
+  dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient']
+
+  created_date TIMESTAMP [not null, note: "indexed"]
+  modified_date TIMESTAMP [not null, note: "indexed"]
+  deleted BOOLEAN [default: false, note: "indexed"]
+
+  created_by_id INTEGER [null, note: 'FK to care_user.id - who created']
+  updated_by_id INTEGER [null, note: 'FK to care_user.id - who last updated']
+
+  history JSON [default: '{}', note: 'Change tracking history']
+  meta JSON [default: 'null', null, note: 'Arbitrary metadata']
+
+  indexes {
+    patient_id
+    radiology_service_request_id
+    deleted
+    (patient_id, dicom_study_uid) [unique, note: 'Each study unique per patient']
+  }
+}
+
+Ref dicom_study_patient: radiology_dicomstudy.patient_id ?> emr_patient.id
+Ref dicom_study_service_request: radiology_dicomstudy.radiology_service_request_id ?> radiology_servicerequest.id
+Ref dicom_study_created_by: radiology_dicomstudy.created_by_id ?> care_user.id
+Ref dicom_study_updated_by: radiology_dicomstudy.updated_by_id ?> care_user.id
+
+// ============================================================================
+// RADIOLOGY WEBHOOK LOGS - Webhook Event Logging
+// Audit trail for DICOM/radiology webhook events
+// ============================================================================
+Table radiology_webhook_logs {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null, note: 'Exposed via API as id']
+
+  type VARCHAR(50) [not null, note: 'Webhook event type']
+  raw_data JSON [not null, note: 'Raw webhook payload received']
+
+  created_date TIMESTAMP [not null, note: "indexed"]
+  modified_date TIMESTAMP [not null, note: "indexed"]
+  deleted BOOLEAN [default: false, note: "indexed"]
+
+  created_by_id INTEGER [null, note: 'FK to care_user.id - who created']
+  updated_by_id INTEGER [null, note: 'FK to care_user.id - who last updated']
+
+  history JSON [default: '{}', note: 'Change tracking history']
+  meta JSON [default: 'null', null, note: 'Arbitrary metadata']
+
+  indexes {
+    type
+    deleted
+  }
+}
+
+Ref webhook_logs_created_by: radiology_webhook_logs.created_by_id ?> care_user.id
+Ref webhook_logs_updated_by: radiology_webhook_logs.updated_by_id ?> care_user.id
+
+// ============================================================================
+// OBSERVATION TEMPLATE - Radiology Observation Templates (N:1 relationship)
+// Template definitions for structured radiology observations linked to observation/activity definitions
+// ============================================================================
+Table radiology_observationtemplate {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null, note: 'Exposed via API as id']
+  facility_id INTEGER [not null, note: 'FK to care_facility.id. ON DELETE CASCADE']
+  observation_definition_id INTEGER [not null, note: 'FK to emr.ObservationDefinition.id. ON DELETE CASCADE']
+  activity_definition_id INTEGER [null, note: 'FK to emr.ActivityDefinition.id. ON DELETE CASCADE']
+
+  title VARCHAR(255) [not null, note: 'Template title - unique per facility']
+  description TEXT [null, note: 'Template description']
+
+  created_date TIMESTAMP [not null, note: "indexed"]
+  modified_date TIMESTAMP [not null, note: "indexed"]
+  deleted BOOLEAN [default: false, note: "indexed"]
+
+  created_by_id INTEGER [null, note: 'FK to care_user.id - who created']
+  updated_by_id INTEGER [null, note: 'FK to care_user.id - who last updated']
+
+  history JSON [default: '{}', note: 'Change tracking history']
+  meta JSON [default: 'null', null, note: 'Arbitrary metadata']
+
+  indexes {
+    facility_id
+    observation_definition_id
+    activity_definition_id
+    deleted
+    (observation_definition_id, activity_definition_id)
+    (facility_id, title) [unique, note: 'Template title unique per facility']
+  }
+}
+
+Ref observation_template_facility: radiology_observationtemplate.facility_id ?> care_facility.id
+Ref observation_template_obs_def: radiology_observationtemplate.observation_definition_id ?> emr_observationdefinition.id
+Ref observation_template_act_def: radiology_observationtemplate.activity_definition_id ?> emr_activitydefinition.id
+Ref observation_template_created_by: radiology_observationtemplate.created_by_id ?> care_user.id
+Ref observation_template_updated_by: radiology_observationtemplate.updated_by_id ?> care_user.id
+
+// ============================================================================
+// OBSERVATION TEMPLATE DATA - Template Data Fields (N:1 relationship)
+// Key-value data associated with observation templates (non-audit model)
+// ============================================================================
+Table radiology_observationtemplatedata {
+  id INTEGER [pk, increment]
+  template_id INTEGER [not null, note: 'FK to radiology_observationtemplate.id. ON DELETE CASCADE']
+
+  code VARCHAR(255) [not null, note: 'Field code/identifier']
+  value TEXT [null, note: 'Field value']
+  description TEXT [null, note: 'Field description']
+}
+
+Ref template_data_template: radiology_observationtemplatedata.template_id ?> radiology_observationtemplate.id
+
+// ============================================================================
+// ACCESSION SEQUENCE - Accession Number Counter (N:1 relationship)
+// Per-(facility, modality_code, year) counter backing accession number generation (internal use)
+// ============================================================================
+Table radiology_accessionsequence {
+  id INTEGER [pk, increment]
+  facility_id INTEGER [not null, note: 'FK to care_facility.id. ON DELETE CASCADE']
+
+  modality_code VARCHAR(100) [not null, default: '', note: 'DICOM modality code (e.g., CT, MR, XC)']
+  year SMALLINT [not null, note: 'Year for accession sequence']
+  last_value INTEGER [not null, default: 0, note: 'Last accession sequence value issued']
+
+  indexes {
+    facility_id
+    (facility_id, modality_code, year) [unique]
+  }
+}
+
+Ref accession_sequence_facility: radiology_accessionsequence.facility_id ?> care_facility.id
+
+// ============================================================================
+// CARE MODELS - External References
+// ============================================================================
+
+Table care_user {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table care_facility {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table emr_patient {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table emr_servicerequest {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table emr_observationdefinition {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table emr_activitydefinition {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}

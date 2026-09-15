@@ -16,13 +16,14 @@ from rest_framework.viewsets import ViewSet
 
 from care_radiology.api.specs.dicom import DicomStudiesQuerySpec, DicomStudyLinkSpec, DicomWorklistQuerySpec
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
 )
 from care_radiology.services.dicom_service import (
     DicomUploadError,
+    WebhookConflictError,
     fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
@@ -148,7 +149,10 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(service_request.facility)
 
-        record = link_service_request_to_study(service_request, request_data.study_uid)
+        try:
+            record = link_service_request_to_study(service_request, request_data.study_uid)
+        except WebhookConflictError as e:
+            return Response({"detail": e.message}, status=status.HTTP_409_CONFLICT)
 
         return Response(
             {
@@ -158,10 +162,6 @@ class DicomViewSet(ViewSet):
             status=status.HTTP_200_OK,
         )
 
-    @staticmethod
-    def _dedupe_studies(radiology_service_requests):
-        return list({r.dicom_study_id: r.dicom_study for r in radiology_service_requests}.values())
-
     def _studies_for_encounter(self, encounter_external_id):
         encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
 
@@ -169,14 +169,14 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to view this encounter")
         self._authorize_read_radiology_data(encounter.facility)
 
-        radiology_service_requests = RadiologyServiceRequest.objects.filter(
-            service_request__encounter=encounter,
-            service_request__deleted=False,
-            dicom_study__deleted=False,
-            dicom_study__dicom_study_uid__isnull=False,
-        ).select_related("dicom_study")
-
-        return self._dedupe_studies(radiology_service_requests)
+        return list(
+            DicomStudy.objects.filter(
+                radiology_service_request__service_request__encounter=encounter,
+                radiology_service_request__service_request__deleted=False,
+                deleted=False,
+                dicom_study_uid__isnull=False,
+            )
+        )
 
     def _studies_for_service_request(self, service_request_external_id):
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_external_id)
@@ -185,13 +185,13 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to view this service request")
         self._authorize_read_radiology_data(service_request.facility)
 
-        radiology_service_requests = RadiologyServiceRequest.objects.filter(
-            service_request=service_request,
-            dicom_study__deleted=False,
-            dicom_study__dicom_study_uid__isnull=False,
-        ).select_related("dicom_study")
-
-        return self._dedupe_studies(radiology_service_requests)
+        return list(
+            DicomStudy.objects.filter(
+                radiology_service_request__service_request=service_request,
+                deleted=False,
+                dicom_study_uid__isnull=False,
+            )
+        )
 
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):

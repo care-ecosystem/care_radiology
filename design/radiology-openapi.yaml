@@ -382,6 +382,16 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The given `study_uid` is already linked to a different service request's
+            `RadiologyServiceRequest` (each study belongs to exactly one).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: "Study is already linked to a different service request"
 
   /api/care_radiology/dicom/studies/:
     get:
@@ -534,7 +544,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Referenced service request or patient not found in CARE
+          description: |
+            Referenced service request or patient not found in CARE, or the `study_id` is
+            already linked to a different service request's `RadiologyServiceRequest`.
           content:
             application/json:
               schema:
@@ -546,6 +558,9 @@ paths:
                 no_patient:
                   value:
                     detail: "No matching patient"
+                study_conflict:
+                  value:
+                    detail: "Study is already linked to a different service request"
 
   /api/care_radiology/webhooks/status/:
     post:

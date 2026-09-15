@@ -117,16 +117,26 @@ def upload_dicom_file(patient, dcm_file):
 
 
 def link_service_request_to_study(service_request, study_uid, raw_data=None):
-    (study, _) = DicomStudy.objects.get_or_create(
-        dicom_study_uid=study_uid, patient=service_request.patient, defaults={}
-    )
+    with transaction.atomic():
+        (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
+            service_request=service_request, defaults={"raw_data": raw_data} if raw_data is not None else {}
+        )
+        if not created and raw_data is not None:
+            rsr.raw_data = raw_data
+            rsr.save(update_fields=["raw_data"])
 
-    (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
-        service_request=service_request, dicom_study=study, defaults={"raw_data": raw_data or {}}
-    )
-    if not created and raw_data is not None:
-        rsr.raw_data = raw_data
-        rsr.save(update_fields=["raw_data"])
+        # select_for_update() makes a concurrent get_or_create() for the same
+        # (patient, study_uid) block on this row (or on the insert) rather than
+        # racing past the check below with stale data.
+        study, _ = DicomStudy.objects.select_for_update().get_or_create(
+            dicom_study_uid=study_uid, patient=service_request.patient
+        )
+        if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
+            raise WebhookConflictError("Study is already linked to a different service request")
+
+        if study.radiology_service_request_id != rsr.id:
+            study.radiology_service_request = rsr
+            study.save(update_fields=["radiology_service_request"])
 
     return {
         "external_id": rsr.external_id,
@@ -147,8 +157,7 @@ def process_study_webhook(data):
                 # If accession_number is duplicated across ServiceRequests, ignore older
                 # ones and use the most recently created match instead of failing:
                 sr = (
-                    ServiceRequest.objects
-                    .filter(meta__accession_number=data["accession_number"])
+                    ServiceRequest.objects.filter(meta__accession_number=data["accession_number"])
                     .order_by("-created_date")
                     .first()
                 )
