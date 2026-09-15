@@ -4,6 +4,7 @@ from django.dispatch import receiver
 
 from care.emr.models.service_request import ServiceRequest
 
+from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.tasks.create_radiology_note_thread import create_radiology_note_thread
 
 from care_radiology.settings import plugin_settings as settings
@@ -16,6 +17,8 @@ def on_service_request_save(sender, instance, created, **kwargs):
 
     if instance.category != settings.CARE_RADIOLOGY_RADIOLOGY_CATEGORY:
         return
+
+    RadiologyServiceRequest.objects.get_or_create(service_request=instance)
 
     transaction.on_commit(
         lambda: create_radiology_note_thread.delay(
