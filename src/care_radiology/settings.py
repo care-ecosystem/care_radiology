@@ -67,9 +67,7 @@ class PluginSettings:  # pragma: no cover
     @property
     def user_settings(self) -> dict:
         if not hasattr(self, "_user_settings"):
-            self._user_settings = getattr(settings, "PLUGIN_CONFIGS", {}).get(
-                self.plugin_name, {}
-            )
+            self._user_settings = getattr(settings, "PLUGIN_CONFIGS", {}).get(self.plugin_name, {})
         return self._user_settings
 
     def validate(self) -> None:
@@ -104,22 +102,23 @@ DEFAULTS = {
     # Settings validated at runtime when used (allows CARE images to build)
     # ========================================================================
     "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE) - required for PACS operations
-    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",             # Secret key for webhook authentication from DICOM modality worklist - required for webhook endpoints
-
+    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",  # Secret key for webhook authentication from DICOM modality worklist - required for webhook endpoints
     # ========================================================================
     # Optional Settings (has sensible defaults, can override if needed)
     # ========================================================================
     "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",  # Service request category for radiology procedures (default: "imaging")
-
     # PACS Server Timeout Configuration
-    "CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT": 30,       # TCP connect timeout for all PACS operations (seconds)
-    "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,       # Read timeout for STOW-RS uploads (seconds, 10 minutes)
-    "CARE_RADIOLOGY_PACS_QUERY_TIMEOUT": 60,         # Read timeout for QIDO-RS queries (seconds, 1 minute)
+    "CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT": 30,  # TCP connect timeout for all PACS operations (seconds)
+    "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,  # Read timeout for STOW-RS uploads (seconds, 10 minutes)
+    "CARE_RADIOLOGY_PACS_QUERY_TIMEOUT": 60,  # Read timeout for QIDO-RS queries (seconds, 1 minute)
+    # Static API key rate limits (django-ratelimit rate strings, per source IP)
+    "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STUDY": "120/m",
+    "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS": "240/m",
+    "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST": "120/m",
+    "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL": "600/m",
 }
 
-plugin_settings = PluginSettings(
-    PLUGIN_NAME, defaults=DEFAULTS, required_settings=REQUIRED_SETTINGS
-)
+plugin_settings = PluginSettings(PLUGIN_NAME, defaults=DEFAULTS, required_settings=REQUIRED_SETTINGS)
 
 
 @receiver(setting_changed)
