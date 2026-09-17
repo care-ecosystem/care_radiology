@@ -44,6 +44,11 @@ Table radiology_dicomstudy {
 
   dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient']
 
+  is_archived BOOLEAN [default: false, note: 'Soft-hide flag, set via the archive action']
+  archive_reason TEXT [not null, default: '', note: 'Reason supplied when archived']
+  archived_datetime TIMESTAMP [null, note: 'When the study was archived']
+  archived_by_id INTEGER [null, note: 'FK to care_user.id - who archived. ON DELETE PROTECT']
+
   created_date TIMESTAMP [not null, note: "indexed"]
   modified_date TIMESTAMP [not null, note: "indexed"]
   deleted BOOLEAN [default: false, note: "indexed"]
@@ -66,6 +71,7 @@ Ref dicom_study_patient: radiology_dicomstudy.patient_id ?> emr_patient.id
 Ref dicom_study_service_request: radiology_dicomstudy.radiology_service_request_id ?> radiology_servicerequest.id
 Ref dicom_study_created_by: radiology_dicomstudy.created_by_id ?> care_user.id
 Ref dicom_study_updated_by: radiology_dicomstudy.updated_by_id ?> care_user.id
+Ref dicom_study_archived_by: radiology_dicomstudy.archived_by_id ?> care_user.id
 
 // ============================================================================
 // RADIOLOGY WEBHOOK LOGS - Webhook Event Logging

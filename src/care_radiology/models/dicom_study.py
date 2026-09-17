@@ -15,5 +15,16 @@ class DicomStudy(EMRBaseModel):
     )
     dicom_study_uid = models.CharField(max_length=500)
 
+    is_archived = models.BooleanField(default=False)
+    archive_reason = models.TextField(blank=True, default="")
+    archived_datetime = models.DateTimeField(blank=True, null=True)
+    archived_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="archived_dicom_studies",
+    )
+
     class Meta:
         constraints = [models.UniqueConstraint(fields=["patient", "dicom_study_uid"], name="unique_patient_study_uid")]

@@ -6,6 +6,7 @@ from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
 from care_radiology.constants import (
@@ -329,3 +330,16 @@ def fetch_study(dicom_study):
 
     cache.set(key, cachable, timeout=60 * 60)
     return cachable
+
+
+def archive_study(study, archive_reason, archived_by=None):
+    """
+    Shared by the manual archive action and the auto-archive celery task.
+    `archived_by` is None for system-initiated (auto) archiving.
+    """
+    study.is_archived = True
+    study.archive_reason = archive_reason
+    study.archived_datetime = timezone.now()
+    study.archived_by = archived_by
+    study.save(update_fields=["is_archived", "archive_reason", "archived_datetime", "archived_by", "modified_date"])
+    return study

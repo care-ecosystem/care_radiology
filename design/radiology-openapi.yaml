@@ -434,6 +434,14 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: includeArchived
+          in: query
+          description: |
+            When `true`, archived studies (`is_archived=true`) are included in the results.
+            Defaults to `false` — archived studies are hidden unless explicitly requested.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: List of DICOM studies with live DCM4CHEE metadata
@@ -455,6 +463,70 @@ paths:
                 errors:
                   - type: "value_error"
                     msg: "Value error, Either encounterId or serviceRequestId is required"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/care_radiology/dicom/{id}/archive/:
+    post:
+      tags:
+        - DICOM Studies
+      summary: Archive a DICOM study
+      description: |
+        Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
+        `archived_datetime`, and `archived_by`. The row is never deleted — it is simply
+        excluded from `GET /dicom/studies/` results unless `includeArchived=true` is passed.
+        Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
+
+        The study must already be linked to a service request (via `link-service-request`) —
+        archiving is rejected otherwise, since authorization is resolved through
+        `radiology_service_request.service_request.facility`. Requires
+        `can_write_radiology_data` permission on that facility.
+
+        There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
+        archive actions.
+      operationId: archiveDicomStudy
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DicomStudyArchiveRequest'
+            example:
+              archive_reason: "Duplicate upload, superseded by a later study"
+      responses:
+        '200':
+          description: Study archived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DicomStudyArchiveState'
+        '400':
+          description: |
+            Payload failed validation against `DicomStudyArchiveSpec` (missing/empty
+            `archive_reason`), or the study is not linked to a service request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_reason:
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["archive_reason"]
+                        msg: "Field required"
+                not_linked:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          detail: "Cannot archive a study that is not linked to a service request"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -962,6 +1034,46 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
+        is_archived:
+          type: boolean
+          description: Whether this study has been archived. Always false unless `includeArchived=true` was passed, since archived studies are excluded by default.
+        archived_datetime:
+          type: string
+          format: date-time
+          nullable: true
+
+    DicomStudyArchiveRequest:
+      type: object
+      required:
+        - archive_reason
+      properties:
+        archive_reason:
+          type: string
+          minLength: 1
+          description: Reason the study is being archived
+
+    DicomStudyArchiveState:
+      type: object
+      description: DB-only view of a DicomStudy's archive state, returned by the archive action
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: DicomStudy external_id
+        dicom_study_uid:
+          type: string
+          description: DICOM Study Instance UID
+        is_archived:
+          type: boolean
+        archive_reason:
+          type: string
+        archived_datetime:
+          type: string
+          format: date-time
+          nullable: true
+        archived_by:
+          $ref: '#/components/schemas/LiteUser'
+          nullable: true
 
     WorklistEntry:
       type: object
