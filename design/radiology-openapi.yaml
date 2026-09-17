@@ -1034,6 +1034,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
+        is_archived:
+          type: boolean
+          description: Whether this study has been archived. Always false unless `includeArchived=true` was passed, since archived studies are excluded by default.
+        archived_datetime:
+          type: string
+          format: date-time
+          nullable: true
 
     DicomStudyArchiveRequest:
       type: object
