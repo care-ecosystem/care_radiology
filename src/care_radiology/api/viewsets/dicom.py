@@ -7,7 +7,6 @@ from care.emr.models.service_request import ServiceRequest
 from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
-from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
@@ -31,6 +30,7 @@ from care_radiology.security.authentication import (
 from care_radiology.services.dicom_service import (
     DicomUploadError,
     WebhookConflictError,
+    archive_study,
     fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
@@ -218,11 +218,7 @@ class DicomViewSet(ViewSet):
         facility = self._resolve_facility_for_archive(study)
         self._authorize_write_radiology_data(facility)
 
-        study.is_archived = True
-        study.archive_reason = request_data.archive_reason
-        study.archived_datetime = timezone.now()
-        study.archived_by = request.user
-        study.save(update_fields=["is_archived", "archive_reason", "archived_datetime", "archived_by", "modified_date"])
+        archive_study(study, request_data.archive_reason, archived_by=request.user)
         return Response(DicomStudyArchiveStateSpec.serialize(study).to_json(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="studies")
