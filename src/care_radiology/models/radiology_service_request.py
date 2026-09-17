@@ -11,12 +11,11 @@ class RadiologyServiceRequestStatus(models.TextChoices):
 
 
 class RadiologyServiceRequest(EMRBaseModel):
-    service_request = models.ForeignKey(
+    service_request = models.OneToOneField(
         ServiceRequest,
         on_delete=models.CASCADE,
         related_name="radiology_service_requests",
         null=True,
-        unique=True,
     )
     raw_data = models.JSONField(default=dict)
     status = models.CharField(

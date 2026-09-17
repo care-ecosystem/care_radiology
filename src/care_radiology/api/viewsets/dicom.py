@@ -7,6 +7,7 @@ from care.emr.models.service_request import ServiceRequest
 from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
@@ -14,7 +15,13 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
-from care_radiology.api.specs.dicom import DicomStudiesQuerySpec, DicomStudyLinkSpec, DicomWorklistQuerySpec
+from care_radiology.api.specs.dicom import (
+    DicomStudiesQuerySpec,
+    DicomStudyArchiveSpec,
+    DicomStudyArchiveStateSpec,
+    DicomStudyLinkSpec,
+    DicomWorklistQuerySpec,
+)
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.security.authentication import (
@@ -43,6 +50,11 @@ class DicomViewSet(ViewSet):
     def _authorize_write_radiology_data(self, facility):
         if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
             raise PermissionDenied("You do not have permission to write radiology data for this facility")
+
+    def _resolve_facility_for_archive(self, study):
+        if not (study.radiology_service_request and study.radiology_service_request.service_request):
+            raise ValidationError({"detail": "Cannot archive a study that is not linked to a service request"})
+        return study.radiology_service_request.service_request.facility
 
     def _handle_dicom_upload(self, patient, dcm_file):
         try:
@@ -162,45 +174,65 @@ class DicomViewSet(ViewSet):
             status=status.HTTP_200_OK,
         )
 
-    def _studies_for_encounter(self, encounter_external_id):
+    def _studies_for_encounter(self, encounter_external_id, include_archived):
         encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
 
         if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
             raise PermissionDenied("You do not have permission to view this encounter")
         self._authorize_read_radiology_data(encounter.facility)
 
-        return list(
-            DicomStudy.objects.filter(
-                radiology_service_request__service_request__encounter=encounter,
-                radiology_service_request__service_request__deleted=False,
-                deleted=False,
-                dicom_study_uid__isnull=False,
-            )
+        qs = DicomStudy.objects.filter(
+            radiology_service_request__service_request__encounter=encounter,
+            radiology_service_request__service_request__deleted=False,
+            deleted=False,
+            dicom_study_uid__isnull=False,
         )
+        if not include_archived:
+            qs = qs.filter(is_archived=False)
+        return list(qs)
 
-    def _studies_for_service_request(self, service_request_external_id):
+    def _studies_for_service_request(self, service_request_external_id, include_archived):
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_external_id)
 
         if not AuthorizationController.call("can_read_service_request", self.request.user, service_request):
             raise PermissionDenied("You do not have permission to view this service request")
         self._authorize_read_radiology_data(service_request.facility)
 
-        return list(
-            DicomStudy.objects.filter(
-                radiology_service_request__service_request=service_request,
-                deleted=False,
-                dicom_study_uid__isnull=False,
-            )
+        qs = DicomStudy.objects.filter(
+            radiology_service_request__service_request=service_request,
+            deleted=False,
+            dicom_study_uid__isnull=False,
         )
+        if not include_archived:
+            qs = qs.filter(is_archived=False)
+        return list(qs)
+
+    @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
+    @action(detail=True, methods=["post"], url_path="archive")
+    def archive(self, request, pk=None):
+        study = get_object_or_404(
+            DicomStudy.objects.select_related("radiology_service_request__service_request__facility"),
+            external_id=pk,
+        )
+        request_data = DicomStudyArchiveSpec(**request.data)
+        facility = self._resolve_facility_for_archive(study)
+        self._authorize_write_radiology_data(facility)
+
+        study.is_archived = True
+        study.archive_reason = request_data.archive_reason
+        study.archived_datetime = timezone.now()
+        study.archived_by = request.user
+        study.save(update_fields=["is_archived", "archive_reason", "archived_datetime", "archived_by", "modified_date"])
+        return Response(DicomStudyArchiveStateSpec.serialize(study).to_json(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="studies")
     def get_studies(self, request):
         query = DicomStudiesQuerySpec(**request.query_params.dict())
 
         if query.service_request_id:
-            studies = self._studies_for_service_request(query.service_request_id)
+            studies = self._studies_for_service_request(query.service_request_id, query.include_archived)
         else:
-            studies = self._studies_for_encounter(query.encounter_id)
+            studies = self._studies_for_encounter(query.encounter_id, query.include_archived)
 
         results = []
         with ThreadPoolExecutor(max_workers=min(10, len(studies) or 1)) as executor:
