@@ -21,17 +21,11 @@ def on_service_request_save(sender, instance, created, **kwargs):
 
     if created:
         RadiologyServiceRequest.objects.get_or_create(service_request=instance)
-
         transaction.on_commit(
-            lambda: create_radiology_note_thread.delay(
-                service_request_id=service_request_id
-            )
+            lambda: create_radiology_note_thread.delay(service_request_id=service_request_id)
         )
-        return
 
     if instance.status in SERVICE_REQUEST_CANCELLED_CHOICES:
         transaction.on_commit(
-            lambda: deactivate_radiology_service_request.delay(
-                service_request_id=service_request_id
-            )
+            lambda: deactivate_radiology_service_request.delay(service_request_id=service_request_id)
         )
