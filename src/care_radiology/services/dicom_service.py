@@ -27,6 +27,7 @@ from care_radiology.utils.dicom import (
     d_query_series_for_study,
     d_query_study,
     encode_file_multipart_related,
+    read_sop_instance_uid,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,10 +48,19 @@ class WebhookConflictError(Exception):
 
 
 def upload_dicom_file(patient, dcm_file):
+    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
     try:
+        sop_instance_uid = read_sop_instance_uid(dcm_file)
+        if sop_instance_uid and d_query_instance(sop_instance_uid) is not None:
+            raise DicomUploadError(
+                "Duplicate : File already uploaded.",
+                status_code=409,
+                extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
+            )
+
         body, content_type = encode_file_multipart_related(dcm_file)
 
         try:
