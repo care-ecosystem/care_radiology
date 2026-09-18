@@ -238,6 +238,7 @@ class DicomViewSet(ViewSet):
                 if result is not None:
                     study = future_to_study[future]
                     result["is_archived"] = study.is_archived
+                    result["archive_reason"] = study.archive_reason
                     result["archived_datetime"] = study.archived_datetime
                     results.append(result)
 

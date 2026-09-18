@@ -1037,6 +1037,10 @@ components:
         is_archived:
           type: boolean
           description: Whether this study has been archived. Always false unless `includeArchived=true` was passed, since archived studies are excluded by default.
+        archive_reason:
+          type: string
+          description: Reason the study was archived. Empty string when the study is not archived.
+          example: "Duplicate upload, superseded by a later study"
         archived_datetime:
           type: string
           format: date-time
