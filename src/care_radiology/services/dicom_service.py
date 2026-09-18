@@ -48,15 +48,11 @@ class WebhookConflictError(Exception):
 
 
 def upload_dicom_file(patient, dcm_file):
+    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
     try:
-        """A DICOM file's identity is its SOP Instance UID. PACS stores
-        by that UID and DicomStudy.update_or_create() keys on the study UID, so a
-        re-upload silently overwrites in place and returns 201 with nothing changed.
-        Reject it up front instead so the caller is told it is a duplicate"""
-        
         sop_instance_uid = read_sop_instance_uid(dcm_file)
         if sop_instance_uid and d_query_instance(sop_instance_uid) is not None:
             raise DicomUploadError(
