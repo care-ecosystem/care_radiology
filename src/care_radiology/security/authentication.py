@@ -5,7 +5,6 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed, Throttled
 from rest_framework.permissions import BasePermission
 
-from care_radiology.constants import WEBHOOK_SECRET
 from care_radiology.settings import plugin_settings
 
 _RATE_LIMIT_SETTING_BY_URL_NAME = {
@@ -25,8 +24,7 @@ class StaticAPIKeyAuthentication(BaseAuthentication):
             raise Throttled(detail="Too many requests. Please try again later.")
 
         api_key = request.headers.get("Authorization")
-        # WEBHOOK_SECRET validates on first comparison (lazy evaluation)
-        if api_key == WEBHOOK_SECRET:
+        if api_key == plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET:
             return (AnonymousUser(), None)
         raise AuthenticationFailed("Invalid API key")
 
@@ -34,5 +32,4 @@ class StaticAPIKeyAuthentication(BaseAuthentication):
 class StaticAPIKeyAuthorization(BasePermission):
     def has_permission(self, request, view):
         api_key = request.headers.get("Authorization")
-        # WEBHOOK_SECRET validates on first comparison (lazy evaluation)
-        return api_key == WEBHOOK_SECRET
+        return api_key == plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET

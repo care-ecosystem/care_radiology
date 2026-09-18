@@ -62,6 +62,7 @@ def _upload_lock_timeout():
 
 
 def upload_dicom_file(patient, dcm_file):
+    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 

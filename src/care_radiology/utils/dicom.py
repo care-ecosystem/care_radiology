@@ -208,6 +208,7 @@ def parse_date(date_str):
 
 
 def encode_file_multipart_related(file_obj):
+    """Encode a DICOM file as a multipart/related request body."""
     import uuid
 
     boundary = f"DICOMBOUNDARY-{uuid.uuid4().hex}"

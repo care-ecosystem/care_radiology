@@ -39,7 +39,6 @@ class PluginSettings:  # pragma: no cover
         self.import_strings = import_strings or set()
         self.required_settings = required_settings or set()
         self._cached_attrs = set()
-        self.validate()
 
     def __getattr__(self, attr) -> Any:
         if attr not in self.defaults:
@@ -73,9 +72,10 @@ class PluginSettings:  # pragma: no cover
     def validate(self) -> None:
         """
         This method handles the validation of the plugin settings.
+        It is called at app startup (apps.py ready()) to validate required settings.
         It could be overridden to provide custom validation logic.
 
-        the base implementation checks if all the required settings are truthy.
+        The base implementation checks if all the required settings are truthy.
         """
         for setting in self.required_settings:
             if not getattr(self, setting):
@@ -95,14 +95,17 @@ class PluginSettings:  # pragma: no cover
             delattr(self, "_user_settings")
 
 
-REQUIRED_SETTINGS = set()  # All settings are optional - validated at runtime when used
+REQUIRED_SETTINGS = {
+    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL",  # DCM4CHE DICOMweb base URL - required for PACS operations
+    "CARE_RADIOLOGY_WEBHOOK_SECRET",  # Secret key for webhook authentication - required for webhook endpoints
+}
 
 DEFAULTS = {
     # ========================================================================
-    # Settings validated at runtime when used (allows CARE images to build)
+    # Required Settings (validated at app startup, skipped during build commands)
     # ========================================================================
-    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE) - required for PACS operations
-    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",  # Secret key for webhook authentication from DICOM modality worklist - required for webhook endpoints
+    "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "",  # DCM4CHE DICOMweb base URL (e.g., http://arc:8080/dcm4chee-arc/aets/DCM4CHEE)
+    "CARE_RADIOLOGY_WEBHOOK_SECRET": "",  # Secret key for webhook authentication from DICOM modality worklist
     # ========================================================================
     # Optional Settings (has sensible defaults, can override if needed)
     # ========================================================================
@@ -126,7 +129,7 @@ plugin_settings = PluginSettings(PLUGIN_NAME, defaults=DEFAULTS, required_settin
 
 
 @receiver(setting_changed)
-def reload_plugin_settings(*args, **kwargs) -> None:
+def reload_plugin_settings(*_args, **kwargs) -> None:
     setting = kwargs["setting"]
     if setting == "PLUGIN_CONFIGS":
         plugin_settings.reload()
