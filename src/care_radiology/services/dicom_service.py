@@ -27,6 +27,7 @@ from care_radiology.utils.dicom import (
     d_query_series_for_study,
     d_query_study,
     encode_file_multipart_related,
+    read_sop_instance_uid,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,19 @@ def upload_dicom_file(patient, dcm_file):
         raise DicomUploadError("No file provided", status_code=400)
 
     try:
+        """A DICOM file's identity is its SOP Instance UID. PACS stores
+        by that UID and DicomStudy.update_or_create() keys on the study UID, so a
+        re-upload silently overwrites in place and returns 201 with nothing changed.
+        Reject it up front instead so the caller is told it is a duplicate"""
+        
+        sop_instance_uid = read_sop_instance_uid(dcm_file)
+        if sop_instance_uid and d_query_instance(sop_instance_uid) is not None:
+            raise DicomUploadError(
+                "Duplicate : File already uploaded.",
+                status_code=409,
+                extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
+            )
+
         body, content_type = encode_file_multipart_related(dcm_file)
 
         try:

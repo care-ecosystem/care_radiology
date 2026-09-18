@@ -227,3 +227,59 @@ def encode_file_multipart_related(file_obj):
     content_type = f'multipart/related; type="application/dicom"; boundary={boundary}'
 
     return body, content_type
+
+
+# Explicit-VR little endian is mandated for the file meta group, so these are the
+# only VRs there that use the 12-byte (reserved + 4-byte length) header form.
+_FILE_META_LONG_FORM_VRS = (b"OB", b"OW", b"OF", b"SQ", b"UT", b"UN")
+
+FILE_META_GROUP = 0x0002
+MEDIA_STORAGE_SOP_INSTANCE_UID = (0x0002, 0x0003)
+
+
+def read_sop_instance_uid(file_obj):
+    """
+    Read MediaStorageSOPInstanceUID (0002,0003) out of a DICOM Part 10 file's meta
+    group, which is identical to the dataset's SOPInstanceUID and uniquely identifies
+    this one file. Used to detect a re-upload of a file already stored in PACS.
+
+    The meta group is always explicit VR little endian regardless of the transfer
+    syntax of the dataset that follows, so it can be parsed without a DICOM library.
+    Returns None if the file is not a parseable Part 10 file.
+    """
+    try:
+        file_obj.seek(0)
+        if file_obj.read(132)[128:] != b"DICM":
+            return None
+
+        while True:
+            header = file_obj.read(8)
+            if len(header) < 8:
+                return None
+
+            group = int.from_bytes(header[0:2], "little")
+            element = int.from_bytes(header[2:4], "little")
+            vr = header[4:6]
+
+            # Past the meta group the transfer syntax may change, and the UID we want
+            # is always present within it, so there is nothing left to look for.
+            if group != FILE_META_GROUP:
+                return None
+
+            if vr in _FILE_META_LONG_FORM_VRS:
+                # Long form: the 2 reserved bytes are header[6:8], already consumed
+                # above, and the length is the 4 bytes that follow.
+                length = int.from_bytes(file_obj.read(4), "little")
+            else:
+                length = int.from_bytes(header[6:8], "little")
+
+            value = file_obj.read(length)
+            if (group, element) == MEDIA_STORAGE_SOP_INSTANCE_UID:
+                # UIDs are padded to an even length with a trailing null byte.
+                return value.decode("ascii").rstrip("\x00").strip() or None
+    except (OSError, UnicodeDecodeError, ValueError):
+        logger.warning("Could not read SOP Instance UID from DICOM file meta group")
+        return None
+    finally:
+        # encode_file_multipart_related() reads the file from the start.
+        file_obj.seek(0)
