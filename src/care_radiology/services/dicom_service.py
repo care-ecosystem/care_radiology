@@ -12,6 +12,7 @@ from rest_framework.exceptions import APIException, ValidationError
 from care_radiology.constants import (
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
+    DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
     MPPS_STATUS_DISCONTINUED,
     MPPS_STATUS_SCAN_STARTED,
     VALID_MPPS_STATUSES,
@@ -47,19 +48,50 @@ class WebhookConflictError(Exception):
         self.message = message
 
 
+def _upload_lock_timeout():
+    """
+    Upper bound on how long the locked section can take, so a worker killed mid-upload
+    cannot strand the lock: the PACS calls it covers are the duplicate query, the STOW-RS
+    upload and the metadata queries that follow, each bounded by its own request timeout.
+    """
+    return (
+        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT
+        + plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT
+        + plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT
+    )
+
+
 def upload_dicom_file(patient, dcm_file):
     """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
+    lock_key = None
     try:
         sop_instance_uid = read_sop_instance_uid(dcm_file)
-        if sop_instance_uid and d_query_instance(sop_instance_uid) is not None:
-            raise DicomUploadError(
-                "Duplicate : File already uploaded.",
-                status_code=409,
-                extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
-            )
+
+        if sop_instance_uid:
+            candidate_key = DICOM_UPLOAD_LOCK_KEY_TEMPLATE.format(sop_instance_uid)
+
+            if cache.add(candidate_key, True, timeout=_upload_lock_timeout()) is False:
+                raise DicomUploadError(
+                    "Duplicate: File already uploaded.",
+                    status_code=409,
+                    extra={
+                        "duplicate": True,
+                        "sop_instance_uid": sop_instance_uid,
+                        "concurrent": True,
+                    },
+                )
+
+            lock_key = candidate_key
+
+            if d_query_instance(sop_instance_uid) is not None:
+                raise DicomUploadError(
+                    "Duplicate: File already uploaded.",
+                    status_code=409,
+                    extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
+                )
 
         body, content_type = encode_file_multipart_related(dcm_file)
 
@@ -131,6 +163,10 @@ def upload_dicom_file(patient, dcm_file):
     except Exception as e:
         logger.exception("Unexpected error during DICOM upload")
         raise DicomUploadError("Exception occurred", status_code=500, extra={"details": str(e)})
+    finally:
+        # Released on failure too, so a retry is not blocked until the lock expires.
+        if lock_key:
+            cache.delete(lock_key)
 
 
 def link_service_request_to_study(service_request, study_uid, raw_data=None):
