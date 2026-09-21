@@ -5,6 +5,7 @@ from care.emr.models.diagnostic_report import DiagnosticReport
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
+from care.emr.resources.service_request.spec import ServiceRequestStatusChoices
 from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
@@ -185,6 +186,7 @@ class DicomViewSet(ViewSet):
         qs = DicomStudy.objects.filter(
             radiology_service_request__service_request__encounter=encounter,
             radiology_service_request__service_request__deleted=False,
+            radiology_service_request__service_request__status=ServiceRequestStatusChoices.active.value,
             deleted=False,
             dicom_study_uid__isnull=False,
         ).select_related("radiology_service_request__service_request")
@@ -260,7 +262,6 @@ class DicomViewSet(ViewSet):
                         dr_id = latest_report_id_by_sr_id.get(sr.id)
                         result["service_request"] = {
                             "id": str(sr.external_id),
-                            "status": sr.status,
                             "diagnostic_report_id": str(dr_id) if dr_id else None,
                         }
                     else:
