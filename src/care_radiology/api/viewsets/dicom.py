@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from care.emr.api.viewsets.base import emr_exception_handler
+from care.emr.models.diagnostic_report import DiagnosticReport
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
 from care.emr.models.service_request import ServiceRequest
+from care.emr.resources.service_request.spec import ServiceRequestStatusChoices
 from care.facility.models import Facility
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
@@ -184,9 +186,10 @@ class DicomViewSet(ViewSet):
         qs = DicomStudy.objects.filter(
             radiology_service_request__service_request__encounter=encounter,
             radiology_service_request__service_request__deleted=False,
+            radiology_service_request__service_request__status=ServiceRequestStatusChoices.active.value,
             deleted=False,
             dicom_study_uid__isnull=False,
-        )
+        ).select_related("radiology_service_request__service_request")
         if not include_archived:
             qs = qs.filter(is_archived=False)
         return list(qs)
@@ -202,7 +205,7 @@ class DicomViewSet(ViewSet):
             radiology_service_request__service_request=service_request,
             deleted=False,
             dicom_study_uid__isnull=False,
-        )
+        ).select_related("radiology_service_request__service_request")
         if not include_archived:
             qs = qs.filter(is_archived=False)
         return list(qs)
@@ -230,6 +233,19 @@ class DicomViewSet(ViewSet):
         else:
             studies = self._studies_for_encounter(query.encounter_id, query.include_archived)
 
+        service_request_ids = {
+            study.radiology_service_request.service_request_id
+            for study in studies
+            if study.radiology_service_request and study.radiology_service_request.service_request_id
+        }
+        latest_report_id_by_sr_id = {
+            row["service_request_id"]: row["external_id"]
+            for row in DiagnosticReport.objects.filter(service_request_id__in=service_request_ids, deleted=False)
+            .order_by("service_request_id", "-created_date")
+            .distinct("service_request_id")
+            .values("service_request_id", "external_id")
+        }
+
         results = []
         with ThreadPoolExecutor(max_workers=min(10, len(studies) or 1)) as executor:
             future_to_study = {executor.submit(fetch_study, study): study for study in studies}
@@ -240,6 +256,17 @@ class DicomViewSet(ViewSet):
                     result["is_archived"] = study.is_archived
                     result["archive_reason"] = study.archive_reason
                     result["archived_datetime"] = study.archived_datetime
+
+                    sr = study.radiology_service_request.service_request if study.radiology_service_request else None
+                    if sr:
+                        dr_id = latest_report_id_by_sr_id.get(sr.id)
+                        result["service_request"] = {
+                            "id": str(sr.external_id),
+                            "diagnostic_report_id": str(dr_id) if dr_id else None,
+                        }
+                    else:
+                        result["service_request"] = None
+
                     results.append(result)
 
         return Response(results, status=status.HTTP_200_OK)

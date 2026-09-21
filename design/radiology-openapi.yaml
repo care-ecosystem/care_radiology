@@ -407,13 +407,17 @@ paths:
         given, `serviceRequestId` wins and `encounterId` is ignored.
 
         If `encounterId` is given: requires `can_view_encounter_obj` permission on the
-        encounter, plus `can_read_radiology_data` permission on the encounter's facility.
+        encounter, plus `can_read_radiology_data` permission on the encounter's facility. Only
+        studies whose linked `ServiceRequest.status` is `active` are returned in this case.
         If `serviceRequestId` is given: requires `can_read_service_request` permission on the
-        service request, plus `can_read_radiology_data` permission on its facility.
+        service request, plus `can_read_radiology_data` permission on its facility. All studies
+        linked to that service request are returned regardless of its status.
 
-        The response is always a bare list of DICOM studies — it does not carry any
-        `ServiceRequest`/`Encounter` data. A caller that needs service-request detail (e.g. its
-        `title`) alongside the studies should fetch it separately via the core CARE
+        Each study includes a `service_request` block (`id` and `diagnostic_report_id`, the
+        latter being the most recently created `DiagnosticReport` for that service request, or
+        `null` if none exists yet) — `null` if the study isn't linked to a service request. A
+        caller that needs further service-request detail (e.g. its `title`) should fetch it
+        separately via the core CARE
         `GET /api/v1/facility/{facilityId}/service_request/{serviceRequestId}/` endpoint.
 
         Note: a previous `patientId` query param was removed — `Patient` has no single
@@ -1045,6 +1049,22 @@ components:
           type: string
           format: date-time
           nullable: true
+        service_request:
+          type: object
+          nullable: true
+          description: Null if this study is not linked to a service request.
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: ServiceRequest external_id
+            diagnostic_report_id:
+              type: string
+              format: uuid
+              nullable: true
+              description: |
+                external_id of the most recently created DiagnosticReport for this service
+                request, or null if none exists yet.
 
     DicomStudyArchiveRequest:
       type: object
