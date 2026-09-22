@@ -11,3 +11,6 @@ VALID_MPPS_STATUSES = [MPPS_STATUS_SCAN_STARTED, MPPS_STATUS_SCAN_COMPLETED, MPP
 DICOM_FILE_EXTENSIONS = (".dcm", ".dicom")
 
 DICOM_STUDY_CACHE_KEY_TEMPLATE = "radiology:dicom:study:{}"
+
+# Serialises concurrent uploads of the same DICOM file, keyed by SOP Instance UID.
+DICOM_UPLOAD_LOCK_KEY_TEMPLATE = "radiology:dicom:upload-lock:{}"
