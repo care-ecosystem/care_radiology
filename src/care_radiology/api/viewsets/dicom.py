@@ -186,7 +186,10 @@ class DicomViewSet(ViewSet):
         qs = DicomStudy.objects.filter(
             radiology_service_request__service_request__encounter=encounter,
             radiology_service_request__service_request__deleted=False,
-            radiology_service_request__service_request__status=ServiceRequestStatusChoices.active.value,
+            radiology_service_request__service_request__status__in=[
+                ServiceRequestStatusChoices.active.value,
+                ServiceRequestStatusChoices.completed.value,
+            ],
             deleted=False,
             dicom_study_uid__isnull=False,
         ).select_related("radiology_service_request__service_request")
