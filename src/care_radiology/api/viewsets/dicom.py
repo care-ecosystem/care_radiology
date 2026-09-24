@@ -33,6 +33,7 @@ from care_radiology.services.dicom_service import (
     DicomUploadError,
     WebhookConflictError,
     archive_study,
+    ensure_study_linked_to_service_request,
     fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
@@ -58,21 +59,42 @@ class DicomViewSet(ViewSet):
             raise ValidationError({"detail": "Cannot archive a study that is not linked to a service request"})
         return study.radiology_service_request.service_request.facility
 
-    def _handle_dicom_upload(self, patient, dcm_file):
+    def _handle_dicom_upload(self, patient, dcm_file, service_request=None):
         try:
             result = upload_dicom_file(patient, dcm_file)
-            return Response(
-                data={
-                    "message": "DICOM files uploaded to DCM4CHE successfully",
-                    **result,
-                },
-                status=status.HTTP_201_CREATED,
-            )
         except DicomUploadError as e:
             return Response(
                 data={"errors": [{"type": "dicom_upload_error", "msg": e.message, **e.extra}]},
                 status=e.status_code,
             )
+
+        data = {"message": "DICOM files uploaded to DCM4CHE successfully", **result}
+
+        # The study UID is only known once DCM4CHE has accepted the file, so the link
+        # is made here rather than up front.
+        if service_request is not None:
+            try:
+                ensure_study_linked_to_service_request(service_request, result["study_uid"])
+            except WebhookConflictError as e:
+                # `uploaded` is set because the file is in PACS by this point: without it
+                # the caller reads a 409 here as a rejected upload and retries, which the
+                # duplicate check then turns into a second, unrelated-looking 409.
+                return Response(
+                    data={
+                        "errors": [
+                            {
+                                "type": "study_link_conflict",
+                                "msg": e.message,
+                                "uploaded": True,
+                                "study_uid": result["study_uid"],
+                            }
+                        ]
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            data["service_request_id"] = str(service_request.external_id)
+
+        return Response(data=data, status=status.HTTP_201_CREATED)
 
     # A dummy API for JWT verification called by nginx-proxy for dicomweb requests
     @action(detail=False, methods=["get"], url_path="authenticate")
@@ -104,6 +126,7 @@ class DicomViewSet(ViewSet):
     def upload(self, request):
         facility_id = request.data.get("facility_id")
         patient_id = request.data.get("patient_id")
+        service_request_id = request.data.get("service_request_id")
         dcm_file = request.FILES.get("file")
 
         errors = {}
@@ -111,6 +134,8 @@ class DicomViewSet(ViewSet):
             errors["facility_id"] = "This value is required"
         if not patient_id:
             errors["patient_id"] = "This value is required"
+        if not service_request_id:
+            errors["service_request_id"] = "This value is required"
         if not dcm_file:
             errors["file"] = "This value is required"
         elif not dcm_file.name.lower().endswith(DICOM_FILE_EXTENSIONS):
@@ -120,12 +145,18 @@ class DicomViewSet(ViewSet):
 
         patient = get_object_or_404(Patient, external_id=patient_id)
         facility = get_object_or_404(Facility, external_id=facility_id)
+        service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
+
+        if service_request.patient_id != patient.id:
+            raise ValidationError({"service_request_id": "Service request does not belong to this patient"})
 
         if not AuthorizationController.call("can_write_patient_obj", request.user, patient):
             raise PermissionDenied("You do not have permission to upload DICOM for this patient")
+        if not AuthorizationController.call("can_write_service_request", request.user, service_request):
+            raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(facility)
 
-        return self._handle_dicom_upload(patient, dcm_file)
+        return self._handle_dicom_upload(patient, dcm_file, service_request=service_request)
 
     # DCM Files upload via static API key (no user auth required)
     @action(

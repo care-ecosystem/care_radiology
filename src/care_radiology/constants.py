@@ -14,3 +14,8 @@ DICOM_STUDY_CACHE_KEY_TEMPLATE = "radiology:dicom:study:{}"
 
 # Serialises concurrent uploads of the same DICOM file, keyed by SOP Instance UID.
 DICOM_UPLOAD_LOCK_KEY_TEMPLATE = "radiology:dicom:upload-lock:{}"
+
+# Marks a (Study Instance UID, service request) pair as linked, so the remaining files
+# of a multi-file study upload skip the lookup.
+DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE = "radiology:dicom:study-link:{}:{}"
+DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS = 5 * 60

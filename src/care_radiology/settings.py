@@ -110,6 +110,8 @@ DEFAULTS = {
     # Optional Settings (has sensible defaults, can override if needed)
     # ========================================================================
     "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",  # Service request category for radiology procedures (default: "imaging")
+    # Reject a DICOM upload whose SOP Instance UID is already in the PACS. 
+    "CARE_RADIOLOGY_DICOM_DUPLICATE_CHECK_ENABLED": True,
     # PACS Server Timeout Configuration
     "CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT": 30,  # TCP connect timeout for all PACS operations (seconds)
     "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,  # Read timeout for STOW-RS uploads (seconds, 10 minutes)
