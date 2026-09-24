@@ -12,6 +12,8 @@ from rest_framework.exceptions import APIException, ValidationError
 from care_radiology.constants import (
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
+    DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE,
+    DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS,
     DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
     MPPS_STATUS_DISCONTINUED,
     MPPS_STATUS_SCAN_STARTED,
@@ -68,7 +70,11 @@ def upload_dicom_file(patient, dcm_file):
 
     lock_key = None
     try:
-        sop_instance_uid = read_sop_instance_uid(dcm_file)
+        duplicate_check_enabled = plugin_settings.CARE_RADIOLOGY_DICOM_DUPLICATE_CHECK_ENABLED
+        if not duplicate_check_enabled:
+            logger.warning("DICOM duplicate check is disabled on this instance, uploading without it")
+
+        sop_instance_uid = read_sop_instance_uid(dcm_file) if duplicate_check_enabled else None
 
         if sop_instance_uid:
             candidate_key = DICOM_UPLOAD_LOCK_KEY_TEMPLATE.format(sop_instance_uid)
@@ -200,6 +206,41 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
         "data": rsr.raw_data,
         "status": rsr.status,
     }
+
+
+def ensure_study_linked_to_service_request(service_request, study_uid):
+    """
+    Link a just-uploaded study to its service request unless that link is already in
+    place. Returns True when this call made the link and False when there was nothing to
+    do; raises WebhookConflictError when the study is held by another service request.
+
+    The outcome is cached per (study, service request) pair, so the rest of the files in
+    a multi-file study upload skip the lookup; a change to either half re-checks.
+    """
+    cache_key = DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study_uid, service_request.external_id)
+    if cache.get(cache_key):
+        return False
+
+    linked_service_requests = set(
+        DicomStudy.objects.filter(
+            dicom_study_uid=study_uid,
+            radiology_service_request__isnull=False,
+            deleted=False,
+        ).values_list("radiology_service_request__service_request__external_id", flat=True)
+    )
+
+    if service_request.external_id in linked_service_requests:
+        newly_linked = False
+    elif linked_service_requests:
+        # Left uncached: an operator undoing the other link has to take effect at once.
+        other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
+        raise WebhookConflictError(f"Study is already linked to a different service request: {other}")
+    else:
+        link_service_request_to_study(service_request, study_uid)
+        newly_linked = True
+
+    cache.set(cache_key, True, timeout=DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS)
+    return newly_linked
 
 
 def process_study_webhook(data):
