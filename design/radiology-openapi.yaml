@@ -1107,11 +1107,9 @@ components:
           type: object
           properties:
             id:
-              type: integer
-              description: Internal DB id (not exposed to clients; included for DICOM MWL use)
-            external_id:
               type: string
               format: uuid
+              description: ServiceRequest external_id
             name:
               type: string
               description: Name of the activity/procedure
@@ -1130,19 +1128,11 @@ components:
           type: object
           properties:
             id:
-              type: integer
-              description: Internal DB id
-            external_id:
               type: string
               format: uuid
+              description: Patient external_id
             name:
               type: string
-            address:
-              type: string
-              nullable: true
-            phone_number:
-              type: string
-              nullable: true
             gender:
               type: string
               nullable: true

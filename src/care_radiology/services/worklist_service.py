@@ -76,8 +76,7 @@ def get_service_requests(
         results.append(
             {
                 "service_request": {
-                    "id": sr.id,
-                    "external_id": sr.external_id,
+                    "id": sr.external_id,
                     "name": name,
                     "date": sr.created_date,
                     "meta": sr.meta,
@@ -92,11 +91,8 @@ def get_service_requests(
                 },
                 "facility": {"id": sr.facility.external_id, "name": sr.facility.name},
                 "patient": {
-                    "id": sr.patient.id,
-                    "external_id": sr.patient.external_id,
+                    "id": sr.patient.external_id,
                     "name": sr.patient.name,
-                    "address": sr.patient.address,
-                    "phone_number": sr.patient.phone_number,
                     "gender": sr.patient.gender,
                     "age": sr.patient.age,
                     "patient_uhid": patient_uhid,
