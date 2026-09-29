@@ -70,7 +70,7 @@ def upload_dicom_file(patient, dcm_file):
 
     lock_key = None
     try:
-        duplicate_check_enabled = plugin_settings.CARE_RADIOLOGY_DICOM_DUPLICATE_CHECK_ENABLED
+        duplicate_check_enabled = plugin_settings.ENABLE_DICOM_DUPLICATE_VALIDATION
         if not duplicate_check_enabled:
             logger.warning("DICOM duplicate check is disabled on this instance, uploading without it")
 
@@ -191,7 +191,13 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
             dicom_study_uid=study_uid, patient=service_request.patient
         )
         if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
-            raise WebhookConflictError("Study is already linked to a different service request")
+            if plugin_settings.ENABLE_DICOM_STUDY_VALIDATION:
+                raise WebhookConflictError("Study is already linked to a different service request")
+            logger.warning(
+                "DICOM study validation is disabled on this instance, relinking study %s to service request %s",
+                study_uid,
+                service_request.external_id,
+            )
 
         if study.radiology_service_request_id != rsr.id:
             study.radiology_service_request = rsr
@@ -210,12 +216,9 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
 
 def ensure_study_linked_to_service_request(service_request, study_uid):
     """
-    Link a just-uploaded study to its service request unless that link is already in
-    place. Returns True when this call made the link and False when there was nothing to
-    do; raises WebhookConflictError when the study is held by another service request.
-
-    The outcome is cached per (study, service request) pair, so the rest of the files in
-    a multi-file study upload skip the lookup; a change to either half re-checks.
+    Links a newly uploaded study to its service request if not already linked, returning True 
+    if linked and False if no action was needed. Raises WebhookConflictError for conflicts 
+    (unless validation is disabled), with results cached per study/request pair.
     """
     cache_key = DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study_uid, service_request.external_id)
     if cache.get(cache_key):
@@ -231,7 +234,7 @@ def ensure_study_linked_to_service_request(service_request, study_uid):
 
     if service_request.external_id in linked_service_requests:
         newly_linked = False
-    elif linked_service_requests:
+    elif linked_service_requests and plugin_settings.ENABLE_DICOM_STUDY_VALIDATION:
         # Left uncached: an operator undoing the other link has to take effect at once.
         other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
         raise WebhookConflictError(f"Study is already linked to a different service request: {other}")

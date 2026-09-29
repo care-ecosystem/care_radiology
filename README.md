@@ -35,9 +35,9 @@ care_radiology_plugin = Plug(
     version="",  # Keep empty for local development
     configs={
         # Base URL for dcm4che DICOMweb API
-        "DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
+        "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
         # Secret used to verify incoming webhooks
-        "WEBHOOK_SECRET": "RADOMSECRET"
+        "CARE_RADIOLOGY_WEBHOOK_SECRET": "RADOMSECRET"
     },
 )
 plugs = [care_radiology_plugin]
@@ -109,13 +109,33 @@ radiology_plug = Plug(
     version="@main",
     configs={
         # can be defined as environment variables in production setup
-        "DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
-        "WEBHOOK_SECRET": "secure-webhook-secret"
+        "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
+        "CARE_RADIOLOGY_WEBHOOK_SECRET": "secure-webhook-secret",
+        # Optional: validation checks, all enabled by default (see Validation Settings below)
+        "ENABLE_DICOM_DUPLICATE_VALIDATION": True,
+        "ENABLE_DICOM_FILE_VALIDATION": True,
+        "ENABLE_DICOM_STUDY_VALIDATION": True,
     },
 )
 plugs = [radiology_plug]
 ...
 ```
+
+### Validation Settings
+
+The plugin validates DICOM uploads and study links before accepting them. Each check is enabled by default and can be disabled in the plugin `configs` or through an environment variable of the same name.
+
+| Setting | Default | What it validates |
+| --- | --- | --- |
+| `ENABLE_DICOM_DUPLICATE_VALIDATION` | `True` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
+| `ENABLE_DICOM_FILE_VALIDATION` | `True` | Rejects an upload (`400`) whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. |
+| `ENABLE_DICOM_STUDY_VALIDATION` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to uploads, the `link-service-request` endpoint and the study webhook. |
+
+When a check is disabled, a warning is logged for each request that skips it. Disabling a check has these effects:
+
+- `ENABLE_DICOM_DUPLICATE_VALIDATION`: the file is sent to the PACS even if it is already stored. dcm4chee silently discards a duplicate SOP Instance UID and still reports success.
+- `ENABLE_DICOM_FILE_VALIDATION`: a file is accepted for a service request whatever accession number it carries.
+- `ENABLE_DICOM_STUDY_VALIDATION`: the study is moved to the new service request. The previous service request is not updated and keeps its `COMPLETED` status.
 
 [Extended Docs on Plug Installation](https://care-be-docs.ohc.network/pluggable-apps/configuration.html)
 
