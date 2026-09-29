@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from care.emr.api.viewsets.base import emr_exception_handler
@@ -39,7 +40,10 @@ from care_radiology.services.dicom_service import (
     upload_dicom_file,
 )
 from care_radiology.services.worklist_service import get_service_requests
+from care_radiology.settings import plugin_settings
 from care_radiology.utils.dicom import DicomParseError, parse_date, read_accession_number
+
+logger = logging.getLogger(__name__)
 
 
 class DicomViewSet(ViewSet):
@@ -95,6 +99,52 @@ class DicomViewSet(ViewSet):
             data["service_request_id"] = str(service_request.external_id)
 
         return Response(data=data, status=status.HTTP_201_CREATED)
+
+    def _validate_accession_number(self, dcm_file, service_request):
+        try:
+            file_accession_number = read_accession_number(dcm_file)
+        except DicomParseError as e:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_unreadable",
+                            "msg": "Could not read the accession number from the DICOM file",
+                            "details": e.message,
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not file_accession_number:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_missing",
+                            "msg": "DICOM file does not contain an accession number",
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_accession_number = (service_request.meta or {}).get("accession_number")
+        if file_accession_number != expected_accession_number:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_mismatch",
+                            "msg": "Accession number in the DICOM file does not match the service request",
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return None
 
     # A dummy API for JWT verification called by nginx-proxy for dicomweb requests
     @action(detail=False, methods=["get"], url_path="authenticate")
@@ -156,48 +206,12 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(facility)
 
-        try:
-            file_accession_number = read_accession_number(dcm_file)
-        except DicomParseError as e:
-            return Response(
-                data={
-                    "errors": [
-                        {
-                            "type": "accession_number_unreadable",
-                            "msg": "Could not read the accession number from the DICOM file",
-                            "details": e.message,
-                        }
-                    ]
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not file_accession_number:
-            return Response(
-                data={
-                    "errors": [
-                        {
-                            "type": "accession_number_missing",
-                            "msg": "DICOM file does not contain an accession number",
-                        }
-                    ]
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        expected_accession_number = (service_request.meta or {}).get("accession_number")
-        if file_accession_number != expected_accession_number:
-            return Response(
-                data={
-                    "errors": [
-                        {
-                            "type": "accession_number_mismatch",
-                            "msg": "Accession number in the DICOM file does not match the service request",
-                        }
-                    ]
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if plugin_settings.ENABLE_DICOM_FILE_VALIDATION:
+            error_response = self._validate_accession_number(dcm_file, service_request)
+            if error_response is not None:
+                return error_response
+        else:
+            logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 
         return self._handle_dicom_upload(patient, dcm_file, service_request=service_request)
 
