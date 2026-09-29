@@ -300,9 +300,9 @@ DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2.1.99"
 
 UNDEFINED_LENGTH = 0xFFFFFFFF
 
-# Accession Number sits near the start of the dataset, so this much inflated data is
-# plenty to find it without decompressing the whole file.
-_DEFLATED_READ_LIMIT = 64 * 1024
+_INFLATE_CHUNK_SIZE = 64 * 1024
+
+_MAX_VALUE_LENGTH = 1024
 
 
 class DicomParseError(Exception):
@@ -313,6 +313,34 @@ class DicomParseError(Exception):
         self.message = message
 
 
+class _InflatingReader:
+    """
+    Read-only stream over a raw-deflated dataset that inflates only as much as is read.
+
+    The parser stops at the first tag past the Accession Number, so this avoids
+    decompressing the whole file without imposing a fixed cut-off that would make
+    a valid dataset look truncated.
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        self._buffer = bytearray()
+
+    def read(self, length):
+        while len(self._buffer) < length and not self._inflater.eof:
+            # Feed back what the previous call left unconsumed before reading more
+            # input, and cap each call's output so a small input cannot expand
+            # unboundedly in a single step.
+            data = self._inflater.unconsumed_tail or self._raw.read(_INFLATE_CHUNK_SIZE)
+            if not data:
+                break
+            self._buffer += self._inflater.decompress(data, _INFLATE_CHUNK_SIZE)
+        chunk = bytes(self._buffer[:length])
+        del self._buffer[:length]
+        return chunk
+
+
 def _read_exact(stream, length):
     data = stream.read(length)
     if len(data) < length:
@@ -320,8 +348,12 @@ def _read_exact(stream, length):
     return data
 
 
-def _read_element(stream, implicit_vr, byteorder):
-    """Read one data element, returning (tag, value), or None at a clean end of data."""
+def _read_element_header(stream, implicit_vr, byteorder):
+    """
+    Read one data element's header, returning (tag, value length), or None at a clean
+    end of data. The value is left unread so the caller can decide from the tag
+    whether it is worth reading at all.
+    """
     header = stream.read(4)
     if not header:
         return None
@@ -338,12 +370,37 @@ def _read_element(stream, implicit_vr, byteorder):
             length = int.from_bytes(_read_exact(stream, 4), byteorder)
         else:
             length = int.from_bytes(_read_exact(stream, 2), byteorder)
+    return tag, length
 
+
+def _check_defined_length(tag, length):
     if length == UNDEFINED_LENGTH:
         raise DicomParseError(
             f"Undefined-length element ({tag[0]:04X},{tag[1]:04X}) before the accession number is not supported"
         )
-    return tag, _read_exact(stream, length)
+
+
+def _read_value(stream, tag, length):
+    """Read a value the parser needs, refusing lengths no valid value of that tag has."""
+    _check_defined_length(tag, length)
+    if length > _MAX_VALUE_LENGTH:
+        raise DicomParseError(f"Element ({tag[0]:04X},{tag[1]:04X}) declares an implausible length of {length} bytes")
+    return _read_exact(stream, length)
+
+
+def _skip_value(stream, tag, length):
+    """Move past a value without holding it in memory."""
+    _check_defined_length(tag, length)
+    if hasattr(stream, "seek"):
+        # Seeking past the end would not fail, so check the declared length fits.
+        position = stream.tell()
+        end = stream.seek(0, io.SEEK_END)
+        if position + length > end:
+            raise DicomParseError("File ends in the middle of a data element")
+        stream.seek(position + length)
+        return
+    while length:
+        length -= len(_read_exact(stream, min(length, _INFLATE_CHUNK_SIZE)))
 
 
 def read_accession_number(file_obj):
@@ -368,28 +425,34 @@ def read_accession_number(file_obj):
             file_obj.seek(dataset_start)
             if int.from_bytes(group, "little") != FILE_META_GROUP:
                 break
-            tag, value = _read_element(file_obj, implicit_vr=False, byteorder="little")
+            tag, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
             if tag == TRANSFER_SYNTAX_UID:
+                value = _read_value(file_obj, tag, length)
                 transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
+            else:
+                _skip_value(file_obj, tag, length)
 
         stream = file_obj
         if transfer_syntax == DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN:
-            inflater = zlib.decompressobj(-zlib.MAX_WBITS)
-            stream = io.BytesIO(inflater.decompress(file_obj.read(_DEFLATED_READ_LIMIT), _DEFLATED_READ_LIMIT))
+            stream = _InflatingReader(file_obj)
 
         implicit_vr = transfer_syntax == IMPLICIT_VR_LITTLE_ENDIAN
         byteorder = "big" if transfer_syntax == EXPLICIT_VR_BIG_ENDIAN else "little"
 
         while True:
-            element = _read_element(stream, implicit_vr, byteorder)
-            if element is None:
+            header = _read_element_header(stream, implicit_vr, byteorder)
+            if header is None:
                 return None
-            tag, value = element
-            if tag == ACCESSION_NUMBER:
-                # SH values are padded to an even length with a trailing space.
-                return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
+            tag, length = header
+            # Elements are in ascending tag order, so once past the accession number
+            # it is known to be absent, whatever this element's value holds.
             if tag > ACCESSION_NUMBER:
                 return None
+            if tag == ACCESSION_NUMBER:
+                value = _read_value(stream, tag, length)
+                # SH values are padded to an even length with a trailing space.
+                return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
+            _skip_value(stream, tag, length)
     except DicomParseError as e:
         logger.warning("Could not read Accession Number from DICOM file: %s", e.message)
         raise
