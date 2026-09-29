@@ -1,4 +1,6 @@
+import io
 import logging
+import zlib
 from datetime import datetime
 from enum import Enum
 
@@ -281,6 +283,119 @@ def read_sop_instance_uid(file_obj):
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Could not read SOP Instance UID from DICOM file meta group")
         return None
+    finally:
+        # encode_file_multipart_related() reads the file from the start.
+        file_obj.seek(0)
+
+
+# Every VR that uses the 12-byte (VR, reserved, 4-byte length) header in explicit VR.
+_EXPLICIT_VR_LONG_FORM_VRS = (b"OB", b"OD", b"OF", b"OL", b"OV", b"OW", b"SQ", b"SV", b"UC", b"UN", b"UR", b"UT", b"UV")
+
+TRANSFER_SYNTAX_UID = (0x0002, 0x0010)
+ACCESSION_NUMBER = (0x0008, 0x0050)
+
+IMPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2"
+EXPLICIT_VR_BIG_ENDIAN = "1.2.840.10008.1.2.2"
+DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2.1.99"
+
+UNDEFINED_LENGTH = 0xFFFFFFFF
+
+# Accession Number sits near the start of the dataset, so this much inflated data is
+# plenty to find it without decompressing the whole file.
+_DEFLATED_READ_LIMIT = 64 * 1024
+
+
+class DicomParseError(Exception):
+    """The file could not be parsed far enough to tell whether it holds a value."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
+
+
+def _read_exact(stream, length):
+    data = stream.read(length)
+    if len(data) < length:
+        raise DicomParseError("File ends in the middle of a data element")
+    return data
+
+
+def _read_element(stream, implicit_vr, byteorder):
+    """Read one data element, returning (tag, value), or None at a clean end of data."""
+    header = stream.read(4)
+    if not header:
+        return None
+    if len(header) < 4:
+        raise DicomParseError("File ends in the middle of a data element")
+    tag = (int.from_bytes(header[0:2], byteorder), int.from_bytes(header[2:4], byteorder))
+
+    if implicit_vr:
+        length = int.from_bytes(_read_exact(stream, 4), byteorder)
+    else:
+        vr = _read_exact(stream, 2)
+        if vr in _EXPLICIT_VR_LONG_FORM_VRS:
+            _read_exact(stream, 2)
+            length = int.from_bytes(_read_exact(stream, 4), byteorder)
+        else:
+            length = int.from_bytes(_read_exact(stream, 2), byteorder)
+
+    if length == UNDEFINED_LENGTH:
+        raise DicomParseError(
+            f"Undefined-length element ({tag[0]:04X},{tag[1]:04X}) before the accession number is not supported"
+        )
+    return tag, _read_exact(stream, length)
+
+
+def read_accession_number(file_obj):
+    """
+    Read Accession Number (0008,0050) from a DICOM Part 10 file.
+    Returns None if missing or empty; raises DicomParseError if the file
+    cannot be parsed far enough to determine the value.
+    """
+    try:
+        file_obj.seek(0)
+        if file_obj.read(132)[128:] != b"DICM":
+            raise DicomParseError("Not a DICOM Part 10 file (missing DICM preamble)")
+
+        transfer_syntax = None
+        while True:
+            # Only the group is peeked at before reading on: past the meta group the
+            # dataset may use another encoding, so its element must not be parsed here.
+            dataset_start = file_obj.tell()
+            group = file_obj.read(2)
+            if len(group) < 2:
+                raise DicomParseError("File contains no dataset after the file meta group")
+            file_obj.seek(dataset_start)
+            if int.from_bytes(group, "little") != FILE_META_GROUP:
+                break
+            tag, value = _read_element(file_obj, implicit_vr=False, byteorder="little")
+            if tag == TRANSFER_SYNTAX_UID:
+                transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
+
+        stream = file_obj
+        if transfer_syntax == DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN:
+            inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+            stream = io.BytesIO(inflater.decompress(file_obj.read(_DEFLATED_READ_LIMIT), _DEFLATED_READ_LIMIT))
+
+        implicit_vr = transfer_syntax == IMPLICIT_VR_LITTLE_ENDIAN
+        byteorder = "big" if transfer_syntax == EXPLICIT_VR_BIG_ENDIAN else "little"
+
+        while True:
+            element = _read_element(stream, implicit_vr, byteorder)
+            if element is None:
+                return None
+            tag, value = element
+            if tag == ACCESSION_NUMBER:
+                # SH values are padded to an even length with a trailing space.
+                return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
+            if tag > ACCESSION_NUMBER:
+                return None
+    except DicomParseError as e:
+        logger.warning("Could not read Accession Number from DICOM file: %s", e.message)
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, zlib.error) as e:
+        logger.warning("Could not read Accession Number from DICOM file: %s", e)
+        raise DicomParseError(f"Could not parse DICOM file: {e}") from e
     finally:
         # encode_file_multipart_related() reads the file from the start.
         file_obj.seek(0)

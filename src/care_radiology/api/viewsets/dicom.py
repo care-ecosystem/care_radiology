@@ -39,7 +39,7 @@ from care_radiology.services.dicom_service import (
     upload_dicom_file,
 )
 from care_radiology.services.worklist_service import get_service_requests
-from care_radiology.utils.dicom import parse_date
+from care_radiology.utils.dicom import DicomParseError, parse_date, read_accession_number
 
 
 class DicomViewSet(ViewSet):
@@ -155,6 +155,49 @@ class DicomViewSet(ViewSet):
         if not AuthorizationController.call("can_write_service_request", request.user, service_request):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(facility)
+
+        try:
+            file_accession_number = read_accession_number(dcm_file)
+        except DicomParseError as e:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_unreadable",
+                            "msg": "Could not read the accession number from the DICOM file",
+                            "details": e.message,
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not file_accession_number:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_missing",
+                            "msg": "DICOM file does not contain an accession number",
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_accession_number = (service_request.meta or {}).get("accession_number")
+        if file_accession_number != expected_accession_number:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "accession_number_mismatch",
+                            "msg": "Accession number in the DICOM file does not match the service request",
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return self._handle_dicom_upload(patient, dcm_file, service_request=service_request)
 
