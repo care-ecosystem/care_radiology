@@ -6,7 +6,7 @@ from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from django.core.cache import cache
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
@@ -15,6 +15,7 @@ from care_radiology.constants import (
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS,
+    DICOM_STUDY_LOCK_KEY_TEMPLATE,
     DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
     MPPS_STATUS_DISCONTINUED,
     MPPS_STATUS_SCAN_STARTED,
@@ -58,6 +59,19 @@ class PacsDeleteError(Exception):
         self.message = message
         self.status_code = status_code
         self.extra = extra or {}
+
+
+def _lock_study_uid(study_uid):
+    """
+    Serialises the archive's PACS delete with every path that creates a DicomStudy for the
+    same Study Instance UID, so the archive either sees the new record and keeps the files,
+    or the new record is created only after the delete.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            [DICOM_STUDY_LOCK_KEY_TEMPLATE.format(study_uid)],
+        )
 
 
 def _upload_lock_timeout():
@@ -151,24 +165,25 @@ def upload_dicom_file(patient, dcm_file):
             )
 
         study_uid = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)[0]
-
-        (dicom_study, _) = DicomStudy.objects.update_or_create(
-            dicom_study_uid=study_uid,
-            patient=patient,
-            is_archived=False,
-            defaults={},
-        )
-
-        key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
-        cache.delete(key)
-
-        study_details = fetch_study(dicom_study)
-        if study_details is None:
-            raise DicomUploadError(
-                "Upload succeeded but failed to fetch complete study details from DCM4CHE",
-                status_code=500,
-                extra={"study_uid": study_uid},
+        with transaction.atomic():
+            _lock_study_uid(study_uid)
+            (dicom_study, _) = DicomStudy.objects.update_or_create(
+                dicom_study_uid=study_uid,
+                patient=patient,
+                is_archived=False,
+                defaults={},
             )
+
+            key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
+            cache.delete(key)
+
+            study_details = fetch_study(dicom_study)
+            if study_details is None:
+                raise DicomUploadError(
+                    "Upload succeeded but failed to fetch complete study details from DCM4CHE",
+                    status_code=500,
+                    extra={"study_uid": study_uid},
+                )
 
         return {
             "study_uid": study_uid,
@@ -198,6 +213,7 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
         # select_for_update() makes a concurrent get_or_create() for the same
         # (patient, study_uid) block on this row (or on the insert) rather than
         # racing past the check below with stale data.
+        _lock_study_uid(study_uid)
         study, _ = DicomStudy.objects.select_for_update().get_or_create(
             dicom_study_uid=study_uid, patient=service_request.patient, is_archived=False
         )
@@ -291,9 +307,11 @@ def process_study_webhook(data):
         if not patient:
             raise WebhookConflictError("No matching patient")
 
-        (study, _) = DicomStudy.objects.get_or_create(
-            dicom_study_uid=data.get("study_id"), patient=patient, is_archived=False, defaults={}
-        )
+        with transaction.atomic():
+            _lock_study_uid(data.get("study_id"))
+            (study, _) = DicomStudy.objects.get_or_create(
+                dicom_study_uid=data.get("study_id"), patient=patient, is_archived=False, defaults={}
+            )
 
         return {
             "external_id": study.external_id,
@@ -497,34 +515,49 @@ def archive_study(study, archive_reason, archived_by=None):
     With CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE enabled, the study's files are
     deleted from the PACS first; if that fails, PacsDeleteError is raised and the study
     is left unarchived so the archive can be retried. A study deleted from the PACS is
-    also soft-deleted in CARE.
+    also soft-deleted in CARE, along with any earlier archived records of the same Study
+    Instance UID.
     """
-    deleted_from_pacs = False
-    if plugin_settings.CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE:
-        # The same Study Instance UID can be recorded against more than one patient; its
-        # files stay in the PACS while any other record still shows them.
-        still_in_use = (
-            DicomStudy.objects.filter(dicom_study_uid=study.dicom_study_uid, is_archived=False, deleted=False)
-            .exclude(pk=study.pk)
-            .exists()
-        )
-        if still_in_use:
-            logger.warning(
-                "DICOM study %s is still referenced by another unarchived study, keeping it in PACS",
-                study.dicom_study_uid,
-            )
-        else:
-            delete_study_from_pacs(study.dicom_study_uid)
-            deleted_from_pacs = True
+    with transaction.atomic():
+        deleted_from_pacs = False
+        if plugin_settings.CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE:
+            _lock_study_uid(study.dicom_study_uid)
 
-    study.is_archived = True
-    study.archive_reason = archive_reason
-    study.archived_datetime = timezone.now()
-    study.archived_by = archived_by
-    study.deleted = study.deleted or deleted_from_pacs
-    study.save(
-        update_fields=["is_archived", "archive_reason", "archived_datetime", "archived_by", "deleted", "modified_date"]
-    )
+            # The same Study Instance UID can be recorded against more than one patient; its
+            # files stay in the PACS while any other record still shows them.
+            still_in_use = (
+                DicomStudy.objects.filter(dicom_study_uid=study.dicom_study_uid, is_archived=False, deleted=False)
+                .exclude(pk=study.pk)
+                .exists()
+            )
+            if still_in_use:
+                logger.warning(
+                    "DICOM study %s is still referenced by another unarchived study, keeping it in PACS",
+                    study.dicom_study_uid,
+                )
+            else:
+                delete_study_from_pacs(study.dicom_study_uid)
+                deleted_from_pacs = True
+
+                DicomStudy.objects.filter(
+                    dicom_study_uid=study.dicom_study_uid, is_archived=True, deleted=False
+                ).exclude(pk=study.pk).update(deleted=True, modified_date=timezone.now())
+
+        study.is_archived = True
+        study.archive_reason = archive_reason
+        study.archived_datetime = timezone.now()
+        study.archived_by = archived_by
+        study.deleted = study.deleted or deleted_from_pacs
+        study.save(
+            update_fields=[
+                "is_archived",
+                "archive_reason",
+                "archived_datetime",
+                "archived_by",
+                "deleted",
+                "modified_date",
+            ]
+        )
 
     # A re-upload of this study has to link its new record, not reuse the cached link.
     rsr = study.radiology_service_request
