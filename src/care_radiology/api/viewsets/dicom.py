@@ -32,6 +32,7 @@ from care_radiology.security.authentication import (
 )
 from care_radiology.services.dicom_service import (
     DicomUploadError,
+    PacsDeleteError,
     WebhookConflictError,
     archive_study,
     ensure_study_linked_to_service_request,
@@ -312,7 +313,13 @@ class DicomViewSet(ViewSet):
         facility = self._resolve_facility_for_archive(study)
         self._authorize_write_radiology_data(facility)
 
-        archive_study(study, request_data.archive_reason, archived_by=request.user)
+        try:
+            archive_study(study, request_data.archive_reason, archived_by=request.user)
+        except PacsDeleteError as e:
+            return Response(
+                data={"errors": [{"type": "pacs_delete_error", "msg": e.message, **e.extra}]},
+                status=e.status_code,
+            )
         return Response(DicomStudyArchiveStateSpec.serialize(study).to_json(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="studies")
