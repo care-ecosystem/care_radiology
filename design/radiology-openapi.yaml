@@ -41,6 +41,8 @@ tags:
     description: Receive DICOM study and MPPS status notifications from the modality worklist server
   - name: Observation Templates
     description: Manage per-facility reusable observation templates used to structure diagnostic report observations
+  - name: Radiology Service Request
+    description: Read radiology-specific metadata (status, accession number) linked to a CARE service request
 
 security:
   - BearerAuth: []
@@ -555,8 +557,8 @@ paths:
         (external_id).
 
         **Shape B — accession_number + study_id:**
-        Links the study to a `ServiceRequest` looked up by `accession_number` stored in
-        `ServiceRequest.meta`.
+        Links the study to a `ServiceRequest` looked up via `RadiologyServiceRequest.accession_number`
+        (also mirrored onto `ServiceRequest.meta.accession_number`).
 
         **Shape C — patient_id + study_id:**
         Links the study directly to a patient identified by their instance identifier
@@ -725,6 +727,50 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 detail: "Error updating tags"
+
+  # ---------- Radiology Service Request ----------
+  /api/care_radiology/radiology_service_request/{serviceRequestId}/:
+    get:
+      tags:
+        - Radiology Service Request
+      summary: Get radiology metadata for a service request
+      description: |
+        Returns the `RadiologyServiceRequest` (status and accession number) linked to a CARE
+        `ServiceRequest`, looked up by the service request's own `external_id` — not the
+        `RadiologyServiceRequest`'s own `id`.
+
+        Requires `can_read_service_request` permission on the service request, plus
+        `can_read_radiology_data` permission on its facility.
+      operationId: getRadiologyServiceRequest
+      parameters:
+        - name: serviceRequestId
+          in: path
+          required: true
+          description: ServiceRequest external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Radiology service request metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RadiologyServiceRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No service request with this external_id, or it has no linked RadiologyServiceRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No RadiologyServiceRequest matches the given query."
 
   # ---------- Observation Templates ----------
   /api/care_radiology/observation_template/:
@@ -1140,6 +1186,30 @@ components:
               type: integer
               nullable: true
 
+    # ===================== Radiology Service Request =====================
+    RadiologyServiceRequest:
+      type: object
+      description: Radiology-specific metadata linked 1:1 to a CARE ServiceRequest
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: RadiologyServiceRequest external_id
+        status:
+          type: string
+          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+        accession_number:
+          type: string
+          nullable: true
+          description: |
+            Accession number generated for this service request (also mirrored onto
+            ServiceRequest.meta.accession_number). Null until a note thread has been
+            created for the request.
+          example: "ACJAYCTO26000004"
+
     # ===================== Webhooks =====================
     WebhookStudyPayload:
       type: object
@@ -1156,7 +1226,7 @@ components:
           description: CARE ServiceRequest external_id (Shape A)
         accession_number:
           type: string
-          description: Accession number stored in ServiceRequest.meta.accession_number (Shape B)
+          description: Accession number, looked up via RadiologyServiceRequest.accession_number (Shape B)
           example: "ACJAYCTO26000004"
         patient_id:
           type: string
