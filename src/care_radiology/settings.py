@@ -112,11 +112,11 @@ DEFAULTS = {
     "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",  # Service request category for radiology procedures (default: "imaging")
     # DICOM Validation Settings (enabled by default, can be disabled for testing/special cases)
     # Reject a DICOM upload whose SOP Instance UID is already in the PACS (prevents re-uploading same file)
-    "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": False,
+    "CARE_RADIOLOGY_ENABLE_DICOM_DUPLICATE_VALIDATION": True,
     # Reject a DICOM upload whose Accession Number is missing or does not match the service request
-    "CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER": True,
+    "CARE_RADIOLOGY_ENABLE_DICOM_FILE_VALIDATION": True,
     # Reject linking a DICOM study to a service request when it is already linked to a different one (one study per SR)
-    "CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR": True,
+    "CARE_RADIOLOGY_ENABLE_DICOM_STUDY_VALIDATION": True,
     # PACS Server Timeout Configuration
     "CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT": 30,  # TCP connect timeout for all PACS operations (seconds)
     "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,  # Read timeout for STOW-RS uploads (seconds, 10 minutes)
