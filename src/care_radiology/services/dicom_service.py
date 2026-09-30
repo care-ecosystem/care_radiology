@@ -70,7 +70,7 @@ def upload_dicom_file(patient, dcm_file):
 
     lock_key = None
     try:
-        duplicate_check_enabled = plugin_settings.ENABLE_DICOM_DUPLICATE_VALIDATION
+        duplicate_check_enabled = plugin_settings.CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE
         if not duplicate_check_enabled:
             logger.warning("DICOM duplicate check is disabled on this instance, uploading without it")
 
@@ -191,7 +191,7 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
             dicom_study_uid=study_uid, patient=service_request.patient
         )
         if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
-            if plugin_settings.ENABLE_DICOM_STUDY_VALIDATION:
+            if plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
                 raise WebhookConflictError("Study is already linked to a different service request")
             logger.warning(
                 "DICOM study validation is disabled on this instance, relinking study %s to service request %s",
@@ -234,7 +234,7 @@ def ensure_study_linked_to_service_request(service_request, study_uid):
 
     if service_request.external_id in linked_service_requests:
         newly_linked = False
-    elif linked_service_requests and plugin_settings.ENABLE_DICOM_STUDY_VALIDATION:
+    elif linked_service_requests and plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
         # Left uncached: an operator undoing the other link has to take effect at once.
         other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
         raise WebhookConflictError(f"Study is already linked to a different service request: {other}")
