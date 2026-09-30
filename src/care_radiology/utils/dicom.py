@@ -1,4 +1,6 @@
+import io
 import logging
+import zlib
 from datetime import datetime
 from enum import Enum
 
@@ -281,6 +283,182 @@ def read_sop_instance_uid(file_obj):
     except (OSError, UnicodeDecodeError, ValueError):
         logger.warning("Could not read SOP Instance UID from DICOM file meta group")
         return None
+    finally:
+        # encode_file_multipart_related() reads the file from the start.
+        file_obj.seek(0)
+
+
+# Every VR that uses the 12-byte (VR, reserved, 4-byte length) header in explicit VR.
+_EXPLICIT_VR_LONG_FORM_VRS = (b"OB", b"OD", b"OF", b"OL", b"OV", b"OW", b"SQ", b"SV", b"UC", b"UN", b"UR", b"UT", b"UV")
+
+TRANSFER_SYNTAX_UID = (0x0002, 0x0010)
+ACCESSION_NUMBER = (0x0008, 0x0050)
+
+IMPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2"
+EXPLICIT_VR_BIG_ENDIAN = "1.2.840.10008.1.2.2"
+DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2.1.99"
+
+UNDEFINED_LENGTH = 0xFFFFFFFF
+
+_INFLATE_CHUNK_SIZE = 64 * 1024
+
+_MAX_VALUE_LENGTH = 1024
+
+
+class DicomParseError(Exception):
+    """The file could not be parsed far enough to tell whether it holds a value."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
+
+
+class _InflatingReader:
+    """
+    Read-only stream over a raw-deflated dataset that inflates only as much as is read.
+
+    The parser stops at the first tag past the Accession Number, so this avoids
+    decompressing the whole file without imposing a fixed cut-off that would make
+    a valid dataset look truncated.
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        self._buffer = bytearray()
+
+    def read(self, length):
+        while len(self._buffer) < length and not self._inflater.eof:
+            # Feed back what the previous call left unconsumed before reading more
+            # input, and cap each call's output so a small input cannot expand
+            # unboundedly in a single step.
+            data = self._inflater.unconsumed_tail or self._raw.read(_INFLATE_CHUNK_SIZE)
+            if not data:
+                break
+            self._buffer += self._inflater.decompress(data, _INFLATE_CHUNK_SIZE)
+        chunk = bytes(self._buffer[:length])
+        del self._buffer[:length]
+        return chunk
+
+
+def _read_exact(stream, length):
+    data = stream.read(length)
+    if len(data) < length:
+        raise DicomParseError("File ends in the middle of a data element")
+    return data
+
+
+def _read_element_header(stream, implicit_vr, byteorder):
+    """
+    Read one data element's header, returning (tag, value length), or None at a clean
+    end of data. The value is left unread so the caller can decide from the tag
+    whether it is worth reading at all.
+    """
+    header = stream.read(4)
+    if not header:
+        return None
+    if len(header) < 4:
+        raise DicomParseError("File ends in the middle of a data element")
+    tag = (int.from_bytes(header[0:2], byteorder), int.from_bytes(header[2:4], byteorder))
+
+    if implicit_vr:
+        length = int.from_bytes(_read_exact(stream, 4), byteorder)
+    else:
+        vr = _read_exact(stream, 2)
+        if vr in _EXPLICIT_VR_LONG_FORM_VRS:
+            _read_exact(stream, 2)
+            length = int.from_bytes(_read_exact(stream, 4), byteorder)
+        else:
+            length = int.from_bytes(_read_exact(stream, 2), byteorder)
+    return tag, length
+
+
+def _check_defined_length(tag, length):
+    if length == UNDEFINED_LENGTH:
+        raise DicomParseError(
+            f"Undefined-length element ({tag[0]:04X},{tag[1]:04X}) before the accession number is not supported"
+        )
+
+
+def _read_value(stream, tag, length):
+    """Read a value the parser needs, refusing lengths no valid value of that tag has."""
+    _check_defined_length(tag, length)
+    if length > _MAX_VALUE_LENGTH:
+        raise DicomParseError(f"Element ({tag[0]:04X},{tag[1]:04X}) declares an implausible length of {length} bytes")
+    return _read_exact(stream, length)
+
+
+def _skip_value(stream, tag, length):
+    """Move past a value without holding it in memory."""
+    _check_defined_length(tag, length)
+    if hasattr(stream, "seek"):
+        # Seeking past the end would not fail, so check the declared length fits.
+        position = stream.tell()
+        end = stream.seek(0, io.SEEK_END)
+        if position + length > end:
+            raise DicomParseError("File ends in the middle of a data element")
+        stream.seek(position + length)
+        return
+    while length:
+        length -= len(_read_exact(stream, min(length, _INFLATE_CHUNK_SIZE)))
+
+
+def read_accession_number(file_obj):
+    """
+    Read Accession Number (0008,0050) from a DICOM Part 10 file.
+    Returns None if missing or empty; raises DicomParseError if the file
+    cannot be parsed far enough to determine the value.
+    """
+    try:
+        file_obj.seek(0)
+        if file_obj.read(132)[128:] != b"DICM":
+            raise DicomParseError("Not a DICOM Part 10 file (missing DICM preamble)")
+
+        transfer_syntax = None
+        while True:
+            # Only the group is peeked at before reading on: past the meta group the
+            # dataset may use another encoding, so its element must not be parsed here.
+            dataset_start = file_obj.tell()
+            group = file_obj.read(2)
+            if len(group) < 2:
+                raise DicomParseError("File contains no dataset after the file meta group")
+            file_obj.seek(dataset_start)
+            if int.from_bytes(group, "little") != FILE_META_GROUP:
+                break
+            tag, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
+            if tag == TRANSFER_SYNTAX_UID:
+                value = _read_value(file_obj, tag, length)
+                transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
+            else:
+                _skip_value(file_obj, tag, length)
+
+        stream = file_obj
+        if transfer_syntax == DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN:
+            stream = _InflatingReader(file_obj)
+
+        implicit_vr = transfer_syntax == IMPLICIT_VR_LITTLE_ENDIAN
+        byteorder = "big" if transfer_syntax == EXPLICIT_VR_BIG_ENDIAN else "little"
+
+        while True:
+            header = _read_element_header(stream, implicit_vr, byteorder)
+            if header is None:
+                return None
+            tag, length = header
+            # Elements are in ascending tag order, so once past the accession number
+            # it is known to be absent, whatever this element's value holds.
+            if tag > ACCESSION_NUMBER:
+                return None
+            if tag == ACCESSION_NUMBER:
+                value = _read_value(stream, tag, length)
+                # SH values are padded to an even length with a trailing space.
+                return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
+            _skip_value(stream, tag, length)
+    except DicomParseError as e:
+        logger.warning("Could not read Accession Number from DICOM file: %s", e.message)
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, zlib.error) as e:
+        logger.warning("Could not read Accession Number from DICOM file: %s", e)
+        raise DicomParseError(f"Could not parse DICOM file: {e}") from e
     finally:
         # encode_file_multipart_related() reads the file from the start.
         file_obj.seek(0)

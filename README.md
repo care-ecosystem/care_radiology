@@ -35,9 +35,9 @@ care_radiology_plugin = Plug(
     version="",  # Keep empty for local development
     configs={
         # Base URL for dcm4che DICOMweb API
-        "DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
+        "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
         # Secret used to verify incoming webhooks
-        "WEBHOOK_SECRET": "RADOMSECRET"
+        "CARE_RADIOLOGY_WEBHOOK_SECRET": "RADOMSECRET"
     },
 )
 plugs = [care_radiology_plugin]
@@ -109,13 +109,33 @@ radiology_plug = Plug(
     version="@main",
     configs={
         # can be defined as environment variables in production setup
-        "DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
-        "WEBHOOK_SECRET": "secure-webhook-secret"
+        "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
+        "CARE_RADIOLOGY_WEBHOOK_SECRET": "secure-webhook-secret",
+        # Optional: validation checks, all enabled by default (see Validation Settings below)
+        "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": False,
+        "CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER": True,
+        "CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR": True,
     },
 )
 plugs = [radiology_plug]
 ...
 ```
+
+### Validation Settings
+
+The plugin validates DICOM uploads and study links before accepting them. Each check is enabled by default and can be disabled in the plugin `configs` or through an environment variable of the same name.
+
+| Setting | Default | What it validates |
+| --- | --- | --- |
+| `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE` | `False` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
+| `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. |
+| `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to uploads, the `link-service-request` endpoint and the study webhook. Enforces one study per service request. |
+
+When a check is disabled, a warning is logged for each request that skips it. Disabling a check has these effects:
+
+- `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`: the file is sent to the PACS even if it is already stored. dcm4chee silently discards a duplicate SOP Instance UID and still reports success.
+- `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER`: a file is accepted for a service request whatever accession number it carries.
+- `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR`: the study is moved to the new service request. The previous service request is not updated and keeps its `COMPLETED` status.
 
 [Extended Docs on Plug Installation](https://care-be-docs.ohc.network/pluggable-apps/configuration.html)
 
