@@ -207,7 +207,7 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to update this service request")
         self._authorize_write_radiology_data(facility)
 
-        if plugin_settings.CARE_RADIOLOGY_ENABLE_DICOM_FILE_VALIDATION:
+        if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
             error_response = self._validate_accession_number(dcm_file, service_request)
             if error_response is not None:
                 return error_response
