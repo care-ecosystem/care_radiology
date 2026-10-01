@@ -112,7 +112,7 @@ DEFAULTS = {
     "CARE_RADIOLOGY_RADIOLOGY_CATEGORY": "imaging",  # Service request category for radiology procedures (default: "imaging")
     # DICOM Validation Settings (enabled by default, can be disabled for testing/special cases)
     # Reject a DICOM upload whose SOP Instance UID is already in the PACS (prevents re-uploading same file)
-    "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": True,
+    "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": False,
     # Reject a DICOM upload whose Accession Number is missing or does not match the service request
     "CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER": True,
     # Reject linking a DICOM study to a service request when it is already linked to a different one (one study per SR)
