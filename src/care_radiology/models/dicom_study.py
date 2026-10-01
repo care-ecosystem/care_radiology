@@ -27,4 +27,10 @@ class DicomStudy(EMRBaseModel):
     )
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["patient", "dicom_study_uid"], name="unique_patient_study_uid")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["patient", "dicom_study_uid"],
+                condition=models.Q(is_archived=False),
+                name="unique_patient_active_study_uid",
+            )
+        ]

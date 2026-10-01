@@ -5,7 +5,7 @@ from celery.utils.log import get_task_logger
 from django.utils import timezone
 
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.services.dicom_service import archive_study
+from care_radiology.services.dicom_service import PacsDeleteError, archive_study
 from care_radiology.settings import plugin_settings
 
 logger = get_task_logger(__name__)
@@ -22,7 +22,12 @@ def archive_old_dicom_studies():
 
     count = 0
     for study in studies.iterator():
-        archive_study(study, archive_reason=f"Auto-archived: older than {auto_archive_days} days")
+        try:
+            archive_study(study, archive_reason=f"Auto-archived: older than {auto_archive_days} days")
+        except PacsDeleteError as e:
+            # Left unarchived, so the next run retries it.
+            logger.warning("Skipped auto-archiving DICOM study %s: %s %s", study.dicom_study_uid, e.message, e.extra)
+            continue
         count += 1
 
     logger.info("Auto-archived %d DICOM studies older than %d days", count, auto_archive_days)
