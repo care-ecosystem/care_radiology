@@ -18,6 +18,7 @@ class RadiologyServiceRequest(EMRBaseModel):
         null=True,
     )
     raw_data = models.JSONField(default=dict)
+    accession_number = models.CharField(max_length=100, null=True, blank=True, db_index=True)
     status = models.CharField(
         max_length=20,
         choices=RadiologyServiceRequestStatus.choices,
