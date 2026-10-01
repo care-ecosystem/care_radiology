@@ -112,7 +112,7 @@ radiology_plug = Plug(
         "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
         "CARE_RADIOLOGY_WEBHOOK_SECRET": "secure-webhook-secret",
         # Optional: validation checks, all enabled by default (see Validation Settings below)
-        "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": True,
+        "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": False,
         "CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER": True,
         "CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR": True,
     },
@@ -127,7 +127,7 @@ The plugin validates DICOM uploads and study links before accepting them. Each c
 
 | Setting | Default | What it validates |
 | --- | --- | --- |
-| `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE` | `True` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
+| `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE` | `False` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
 | `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) to the `upload` endpoint whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. `upload-dicom-external` has no service request and is not checked. |
 | `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to uploads, the `link-service-request` endpoint and the study webhook. |
 
