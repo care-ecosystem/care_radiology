@@ -282,15 +282,17 @@ def process_study_webhook(data):
                 # Priority 1: Lookup by service_request_id (external_id)
                 sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
             elif data.get("accession_number"):
-                # Priority 2: Lookup by accession_number in meta JSON field
+                # Priority 2: Lookup by accession_number on RadiologyServiceRequest
 
                 # If accession_number is duplicated across ServiceRequests, ignore older
                 # ones and use the most recently created match instead of failing:
-                sr = (
-                    ServiceRequest.objects.filter(meta__accession_number=data["accession_number"])
+                rsr = (
+                    RadiologyServiceRequest.objects.filter(accession_number=data["accession_number"])
                     .order_by("-created_date")
+                    .select_related("service_request")
                     .first()
                 )
+                sr = rsr.service_request if rsr else None
                 if sr is None:
                     raise ServiceRequest.DoesNotExist
             else:

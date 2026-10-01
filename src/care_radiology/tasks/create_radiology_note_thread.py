@@ -8,6 +8,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from care_radiology.models.accession_sequence import AccessionSequence
+from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,9 @@ def create_radiology_note_thread(service_request_id: str):
                     accession_number = generate_accession_number(service_request)
                     locked.meta["accession_number"] = accession_number
                     locked.save(update_fields=["meta"])
+                    RadiologyServiceRequest.objects.filter(service_request_id=service_request_id).update(
+                        accession_number=accession_number
+                    )
                 service_request.meta = locked.meta
 
         note_thread, _ = NoteThread.objects.get_or_create(

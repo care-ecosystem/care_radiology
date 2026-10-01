@@ -11,6 +11,8 @@ Table radiology_servicerequest {
   service_request_id INTEGER [null, unique, note: 'FK to emr.ServiceRequest.id (1:1, nullable). ON DELETE CASCADE']
 
   raw_data JSON [default: '{}', note: 'Raw service request data from external source']
+  accession_number VARCHAR(100) [null, note: 'Mirrors ServiceRequest.meta.accession_number; primary lookup key for study webhooks']
+  status VARCHAR(20) [not null, default: 'ACTIVE', note: 'ACTIVE, IN_PROGRESS, COMPLETED, or CANCELLED']
 
   created_date TIMESTAMP [not null, note: "indexed"]
   modified_date TIMESTAMP [not null, note: "indexed"]
@@ -25,6 +27,7 @@ Table radiology_servicerequest {
   indexes {
     service_request_id
     deleted
+    accession_number
   }
 }
 
