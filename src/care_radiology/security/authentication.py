@@ -1,6 +1,6 @@
+from config.ratelimit import ratelimit
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
-from django_ratelimit.core import is_ratelimited
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed, Throttled
 from rest_framework.permissions import BasePermission
@@ -20,7 +20,7 @@ class StaticAPIKeyAuthentication(BaseAuthentication):
         url_name = request.resolver_match.url_name
         setting_name = _RATE_LIMIT_SETTING_BY_URL_NAME.get(url_name)
         rate = getattr(plugin_settings, setting_name) if setting_name else settings.DJANGO_RATE_LIMIT
-        if is_ratelimited(request, group=f"static-api-key:{url_name}", key="ip", rate=rate, increment=True):
+        if ratelimit(request, group=f"static-api-key:{url_name}", keys=["ip"], rate=rate):
             raise Throttled(detail="Too many requests. Please try again later.")
 
         api_key = request.headers.get("Authorization")
