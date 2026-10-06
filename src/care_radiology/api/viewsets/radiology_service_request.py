@@ -1,11 +1,13 @@
 from care.emr.api.viewsets.base import EMRBaseViewSet, EMRRetrieveMixin
 from care.security.authorization.base import AuthorizationController
 from rest_framework.exceptions import PermissionDenied
+from drf_spectacular.utils import extend_schema
 
 from care_radiology.api.specs.radiology_service_request import RadiologyServiceRequestReadSpec
 from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 
 
+@extend_schema(tags=["Radiology: Service Request"])
 class RadiologyServiceRequestViewSet(EMRRetrieveMixin, EMRBaseViewSet):
     database_model = RadiologyServiceRequest
     pydantic_retrieve_model = RadiologyServiceRequestReadSpec

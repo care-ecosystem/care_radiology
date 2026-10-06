@@ -22,6 +22,7 @@ from care_radiology.services.dicom_service import (
 logger = logging.getLogger(__name__)
 
 
+@extend_schema(tags=["Radiology: Webhooks"])
 class WebhookViewSet(ViewSet):
     def get_exception_handler(self):
         return emr_exception_handler

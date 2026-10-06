@@ -47,6 +47,7 @@ from care_radiology.utils.dicom import DicomParseError, parse_date, read_accessi
 logger = logging.getLogger(__name__)
 
 
+@extend_schema(tags=["Radiology: Dicom"])
 class DicomViewSet(ViewSet):
     def get_exception_handler(self):
         return emr_exception_handler
