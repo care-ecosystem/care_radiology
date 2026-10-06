@@ -2,6 +2,7 @@ from django.db import IntegrityError
 from django_filters import rest_framework as filters
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter
+from drf_spectacular.utils import extend_schema
 
 from care.emr.api.viewsets.base import (
     EMRBaseViewSet,
@@ -31,6 +32,7 @@ class ObservationTemplateFilters(filters.FilterSet):
     title = filters.CharFilter(lookup_expr="icontains")
 
 
+@extend_schema(tags=["Radiology: Observation Template"])
 class ObservationTemplateViewSet(
     EMRCreateMixin,
     EMRRetrieveMixin,
