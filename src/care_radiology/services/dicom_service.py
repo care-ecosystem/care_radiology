@@ -87,7 +87,7 @@ def _upload_lock_timeout():
     )
 
 
-def upload_dicom_file(patient, dcm_file):
+def upload_dicom_file(patient, dcm_file, user=None):
     """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
@@ -171,7 +171,8 @@ def upload_dicom_file(patient, dcm_file):
                 dicom_study_uid=study_uid,
                 patient=patient,
                 is_archived=False,
-                defaults={},
+                defaults={"updated_by": user} if user else {},
+                create_defaults={"created_by": user, "updated_by": user},
             )
 
             key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
@@ -201,7 +202,7 @@ def upload_dicom_file(patient, dcm_file):
             cache.delete(lock_key)
 
 
-def link_service_request_to_study(service_request, study_uid, raw_data=None):
+def link_service_request_to_study(service_request, study_uid, raw_data=None, user=None):
     with transaction.atomic():
         (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
             service_request=service_request, defaults={"raw_data": raw_data} if raw_data is not None else {}
@@ -215,7 +216,10 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
         # racing past the check below with stale data.
         _lock_study_uid(study_uid)
         study, _ = DicomStudy.objects.select_for_update().get_or_create(
-            dicom_study_uid=study_uid, patient=service_request.patient, is_archived=False
+            dicom_study_uid=study_uid,
+            patient=service_request.patient,
+            is_archived=False,
+            defaults={"created_by": user, "updated_by": user},
         )
         if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
             if plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
@@ -228,7 +232,11 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
 
         if study.radiology_service_request_id != rsr.id:
             study.radiology_service_request = rsr
-            study.save(update_fields=["radiology_service_request"])
+            update_fields = ["radiology_service_request", "modified_date"]
+            if user:
+                study.updated_by = user
+                update_fields.append("updated_by")
+            study.save(update_fields=update_fields)
 
         if rsr.status != RadiologyServiceRequestStatus.CANCELLED:
             rsr.status = RadiologyServiceRequestStatus.COMPLETED
@@ -241,7 +249,7 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None):
     }
 
 
-def ensure_study_linked_to_service_request(service_request, study_uid):
+def ensure_study_linked_to_service_request(service_request, study_uid, user=None):
     """
     Links a newly uploaded study to its service request if not already linked, returning True 
     if linked and False if no action was needed. Raises WebhookConflictError for conflicts 
@@ -267,7 +275,7 @@ def ensure_study_linked_to_service_request(service_request, study_uid):
         other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
         raise WebhookConflictError(f"Study is already linked to a different service request: {other}")
     else:
-        link_service_request_to_study(service_request, study_uid)
+        link_service_request_to_study(service_request, study_uid, user=user)
         newly_linked = True
 
     cache.set(cache_key, True, timeout=DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS)
@@ -550,16 +558,18 @@ def archive_study(study, archive_reason, archived_by=None):
         study.archived_datetime = timezone.now()
         study.archived_by = archived_by
         study.deleted = study.deleted or deleted_from_pacs
-        study.save(
-            update_fields=[
-                "is_archived",
-                "archive_reason",
-                "archived_datetime",
-                "archived_by",
-                "deleted",
-                "modified_date",
-            ]
-        )
+        update_fields = [
+            "is_archived",
+            "archive_reason",
+            "archived_datetime",
+            "archived_by",
+            "deleted",
+            "modified_date",
+        ]
+        if archived_by:
+            study.updated_by = archived_by
+            update_fields.append("updated_by")
+        study.save(update_fields=update_fields)
 
     # A re-upload of this study has to link its new record, not reuse the cached link.
     rsr = study.radiology_service_request
