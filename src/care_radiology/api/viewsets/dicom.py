@@ -202,11 +202,6 @@ class DicomViewSet(ViewSet):
         if service_request.patient_id != patient.id:
             raise ValidationError({"service_request_id": "Service request does not belong to this patient"})
 
-        if not AuthorizationController.call("can_write_patient_obj", request.user, patient):
-            raise PermissionDenied("You do not have permission to upload DICOM for this patient")
-        if not AuthorizationController.call("can_write_service_request", request.user, service_request):
-            raise PermissionDenied("You do not have permission to update this service request")
-        self._authorize_write_radiology_data(facility)
 
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
             error_response = self._validate_accession_number(dcm_file, service_request)
