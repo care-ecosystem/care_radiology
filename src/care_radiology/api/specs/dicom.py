@@ -1,7 +1,7 @@
 import datetime
 
-from care.emr.resources.base import EMRResource, model_from_cache
-from care.emr.resources.user.spec import UserSpec
+from care.emr.resources.base import EMRResource
+from care.users.models import User
 from pydantic import UUID4, BaseModel, Field, model_validator
 
 from care_radiology.models.dicom_study import DicomStudy
@@ -28,6 +28,21 @@ class DicomStudyArchiveSpec(BaseModel):
     archive_reason: str = Field(min_length=1)
 
 
+class DicomStudyUserSpec(EMRResource):
+    __model__ = User
+
+    id: UUID4 | None = None
+    username: str
+    prefix: str | None = None
+    first_name: str
+    last_name: str
+    suffix: str | None = None
+
+    @classmethod
+    def perform_extra_serialization(cls, mapping, obj):
+        mapping["id"] = str(obj.external_id)
+
+
 class DicomStudyArchiveStateSpec(EMRResource):
     __model__ = DicomStudy
 
@@ -36,13 +51,16 @@ class DicomStudyArchiveStateSpec(EMRResource):
     is_archived: bool
     archive_reason: str
     archived_datetime: datetime.datetime | None = None
-    archived_by: UserSpec | None = None
+    archived_by: DicomStudyUserSpec | None = None
+    created_by: DicomStudyUserSpec | None = None
+    updated_by: DicomStudyUserSpec | None = None
 
     @classmethod
     def perform_extra_serialization(cls, mapping, obj):
         super().perform_extra_serialization(mapping, obj)
-        if obj.archived_by_id:
-            mapping["archived_by"] = model_from_cache(UserSpec, id=obj.archived_by_id)
+        for field in ("created_by", "updated_by", "archived_by"):
+            user = getattr(obj, field)
+            mapping[field] = DicomStudyUserSpec.serialize(user).to_json() if user else None
 
 
 class DicomWorklistQuerySpec(BaseModel):

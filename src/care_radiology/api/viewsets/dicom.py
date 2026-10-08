@@ -22,6 +22,7 @@ from care_radiology.api.specs.dicom import (
     DicomStudyArchiveSpec,
     DicomStudyArchiveStateSpec,
     DicomStudyLinkSpec,
+    DicomStudyUserSpec,
     DicomWorklistQuerySpec,
 )
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
@@ -65,9 +66,9 @@ class DicomViewSet(ViewSet):
             raise ValidationError({"detail": "Cannot archive a study that is not linked to a service request"})
         return study.radiology_service_request.service_request.facility
 
-    def _handle_dicom_upload(self, patient, dcm_file, service_request=None):
+    def _handle_dicom_upload(self, patient, dcm_file, service_request=None, user=None):
         try:
-            result = upload_dicom_file(patient, dcm_file)
+            result = upload_dicom_file(patient, dcm_file, user=user)
         except DicomUploadError as e:
             return Response(
                 data={"errors": [{"type": "dicom_upload_error", "msg": e.message, **e.extra}]},
@@ -80,7 +81,7 @@ class DicomViewSet(ViewSet):
         # is made here rather than up front.
         if service_request is not None:
             try:
-                ensure_study_linked_to_service_request(service_request, result["study_uid"])
+                ensure_study_linked_to_service_request(service_request, result["study_uid"], user=user)
             except WebhookConflictError as e:
                 # `uploaded` is set because the file is in PACS by this point: without it
                 # the caller reads a 409 here as a rejected upload and retries, which the
@@ -210,7 +211,7 @@ class DicomViewSet(ViewSet):
         else:
             logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 
-        return self._handle_dicom_upload(patient, dcm_file, service_request=service_request)
+        return self._handle_dicom_upload(patient, dcm_file, service_request=service_request, user=request.user)
 
     # DCM Files upload via static API key (no user auth required)
     @action(
@@ -249,7 +250,7 @@ class DicomViewSet(ViewSet):
         self._authorize_write_radiology_data(service_request.facility)
 
         try:
-            record = link_service_request_to_study(service_request, request_data.study_uid)
+            record = link_service_request_to_study(service_request, request_data.study_uid, user=request.user)
         except WebhookConflictError as e:
             return Response({"detail": e.message}, status=status.HTTP_409_CONFLICT)
 
@@ -277,7 +278,9 @@ class DicomViewSet(ViewSet):
             ],
             deleted=False,
             dicom_study_uid__isnull=False,
-        ).select_related("radiology_service_request__service_request")
+        ).select_related(
+            "radiology_service_request__service_request", "created_by", "updated_by", "archived_by"
+        )
         if not include_archived:
             qs = qs.filter(is_archived=False)
         return list(qs)
@@ -293,7 +296,9 @@ class DicomViewSet(ViewSet):
             radiology_service_request__service_request=service_request,
             deleted=False,
             dicom_study_uid__isnull=False,
-        ).select_related("radiology_service_request__service_request")
+        ).select_related(
+            "radiology_service_request__service_request", "created_by", "updated_by", "archived_by"
+        )
         if not include_archived:
             qs = qs.filter(is_archived=False)
         return list(qs)
@@ -302,7 +307,9 @@ class DicomViewSet(ViewSet):
     @action(detail=True, methods=["post"], url_path="archive")
     def archive(self, request, pk=None):
         study = get_object_or_404(
-            DicomStudy.objects.select_related("radiology_service_request__service_request__facility"),
+            DicomStudy.objects.select_related(
+                "radiology_service_request__service_request__facility", "created_by", "updated_by"
+            ),
             external_id=pk,
         )
         request_data = DicomStudyArchiveSpec(**request.data)
@@ -350,6 +357,9 @@ class DicomViewSet(ViewSet):
                     result["is_archived"] = study.is_archived
                     result["archive_reason"] = study.archive_reason
                     result["archived_datetime"] = study.archived_datetime
+                    for field in ("created_by", "updated_by", "archived_by"):
+                        user = getattr(study, field)
+                        result[field] = DicomStudyUserSpec.serialize(user).to_json() if user else None
 
                     sr = study.radiology_service_request.service_request if study.radiology_service_request else None
                     if sr:
