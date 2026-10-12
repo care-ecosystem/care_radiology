@@ -8,32 +8,26 @@
 Table radiology_servicerequest {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
-  service_request_id INTEGER [null, unique, note: 'FK to emr.ServiceRequest.id (1:1, nullable). ON DELETE CASCADE']
+  service_request_id INTEGER [not null, unique, note: 'FK to emr.ServiceRequest.id (1:1). ON DELETE CASCADE']
+  encounter_id INTEGER [not null, note: 'FK to emr.Encounter.id, copied from service_request.encounter. ON DELETE CASCADE']
 
-  raw_data JSON [default: '{}', note: 'Raw service request data from external source']
-  accession_number VARCHAR(100) [null, note: 'Mirrors ServiceRequest.meta.accession_number; primary lookup key for study webhooks']
+  accession_number VARCHAR(100) [null, note: 'Only copy of the accession number; lookup key for study webhooks']
   status VARCHAR(20) [not null, default: 'ACTIVE', note: 'ACTIVE, IN_PROGRESS, COMPLETED, or CANCELLED']
 
   created_date TIMESTAMP [not null, note: "indexed"]
   modified_date TIMESTAMP [not null, note: "indexed"]
   deleted BOOLEAN [default: false, note: "indexed"]
 
-  created_by_id INTEGER [null, note: 'FK to care_user.id - who created']
-  updated_by_id INTEGER [null, note: 'FK to care_user.id - who last updated']
-
-  history JSON [default: '{}', note: 'Change tracking history']
-  meta JSON [default: 'null', null, note: 'Arbitrary metadata']
-
   indexes {
     service_request_id
+    encounter_id
     deleted
     accession_number
   }
 }
 
 Ref service_request_fk: radiology_servicerequest.service_request_id ?> emr_servicerequest.id
-Ref service_request_created_by: radiology_servicerequest.created_by_id ?> care_user.id
-Ref service_request_updated_by: radiology_servicerequest.updated_by_id ?> care_user.id
+Ref service_request_encounter: radiology_servicerequest.encounter_id ?> emr_encounter.id
 
 // ============================================================================
 // DICOM STUDY - DICOM Study Records (N:1 relationship)
@@ -201,6 +195,11 @@ Table emr_patient {
 }
 
 Table emr_servicerequest {
+  id INTEGER [pk, increment]
+  external_id UUID [unique, not null]
+}
+
+Table emr_encounter {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null]
 }
