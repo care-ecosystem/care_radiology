@@ -202,14 +202,11 @@ def upload_dicom_file(patient, dcm_file, user=None):
             cache.delete(lock_key)
 
 
-def link_service_request_to_study(service_request, study_uid, raw_data=None, user=None):
+def link_service_request_to_study(service_request, study_uid, user=None):
     with transaction.atomic():
-        (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
-            service_request=service_request, defaults={"raw_data": raw_data} if raw_data is not None else {}
+        rsr, _ = RadiologyServiceRequest.objects.get_or_create(
+            service_request=service_request, defaults={"encounter_id": service_request.encounter_id}
         )
-        if not created and raw_data is not None:
-            rsr.raw_data = raw_data
-            rsr.save(update_fields=["raw_data"])
 
         # select_for_update() makes a concurrent get_or_create() for the same
         # (patient, study_uid) block on this row (or on the insert) rather than
@@ -244,7 +241,6 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None, use
 
     return {
         "external_id": rsr.external_id,
-        "data": rsr.raw_data,
         "status": rsr.status,
     }
 
@@ -308,7 +304,7 @@ def process_study_webhook(data):
         except ServiceRequest.DoesNotExist:
             raise WebhookConflictError("No matching service request")
 
-        return link_service_request_to_study(sr, data["study_id"], raw_data=data)
+        return link_service_request_to_study(sr, data["study_id"])
 
     elif data.get("patient_id") and data.get("study_id"):
         from care.emr.models.patient import Patient

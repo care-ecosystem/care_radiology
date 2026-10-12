@@ -20,7 +20,7 @@ def on_service_request_save(sender, instance, created, **kwargs):
     service_request_id = instance.id
 
     if created:
-        RadiologyServiceRequest.objects.create(service_request=instance)
+        RadiologyServiceRequest.objects.create(service_request=instance, encounter=instance.encounter)
         transaction.on_commit(
             lambda: assign_accession_number.delay(service_request_id=service_request_id)
         )

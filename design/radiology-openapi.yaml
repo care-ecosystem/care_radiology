@@ -42,7 +42,7 @@ tags:
   - name: Observation Templates
     description: Manage per-facility reusable observation templates used to structure diagnostic report observations
   - name: Radiology Service Request
-    description: Read radiology service requests (status, accession number) with their core service request and DICOM studies
+    description: Read radiology service requests (status, accession number) with their core service request and DICOM studies, and update their status
 
 security:
   - BearerAuth: []
@@ -667,6 +667,66 @@ paths:
                   - type: "object_not_found"
                     msg: "No RadiologyServiceRequest matches the given query."
 
+    patch:
+      tags:
+        - Radiology Service Request
+      summary: Update a radiology service request's status
+      description: |
+        Sets `status` on the `RadiologyServiceRequest` linked to a CARE `ServiceRequest`,
+        looked up by the service request's own `external_id`, like the retrieve. Any status can
+        be set from any status. Returns the same body as the retrieve.
+
+        Requires `can_write_radiology_data` permission on the service request's facility.
+      operationId: updateRadiologyServiceRequestStatus
+      parameters:
+        - name: serviceRequestId
+          in: path
+          required: true
+          description: ServiceRequest external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RadiologyServiceRequestStatusUpdate'
+            example:
+              status: "IN_PROGRESS"
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RadiologyServiceRequest'
+        '400':
+          description: '`status` is missing or not one of the allowed values'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "enum"
+                    loc: ["status"]
+                    msg: "Input should be 'ACTIVE', 'IN_PROGRESS', 'COMPLETED' or 'CANCELLED'"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No service request with this external_id, or it has no linked RadiologyServiceRequest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No RadiologyServiceRequest matches the given query."
+
   # ---------- Observation Templates ----------
   /api/care_radiology/observation_template/:
     get:
@@ -1193,6 +1253,15 @@ components:
           items:
             type: string
             format: uuid
+
+    RadiologyServiceRequestStatusUpdate:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
 
     RadiologyServiceRequestList:
       allOf:
