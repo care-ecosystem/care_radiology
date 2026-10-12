@@ -21,12 +21,12 @@ from care_radiology.api.specs.dicom import (
     DicomStudiesQuerySpec,
     DicomStudyArchiveSpec,
     DicomStudyArchiveStateSpec,
-    DicomStudyLinkSpec,
     DicomStudyUserSpec,
     DicomWorklistQuerySpec,
 )
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
+from care_radiology.models.radiology_service_request import RadiologyServiceRequest
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
@@ -38,7 +38,6 @@ from care_radiology.services.dicom_service import (
     archive_study,
     ensure_study_linked_to_service_request,
     fetch_study,
-    link_service_request_to_study,
     upload_dicom_file,
 )
 from care_radiology.services.worklist_service import get_service_requests
@@ -133,7 +132,11 @@ class DicomViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        expected_accession_number = (service_request.meta or {}).get("accession_number")
+        expected_accession_number = (
+            RadiologyServiceRequest.objects.filter(service_request=service_request)
+            .values_list("accession_number", flat=True)
+            .first()
+        )
         if file_accession_number != expected_accession_number:
             return Response(
                 data={
@@ -236,31 +239,6 @@ class DicomViewSet(ViewSet):
         patient = get_object_or_404(Patient, external_id=patient_id)
 
         return self._handle_dicom_upload(patient, dcm_file)
-
-    # Link an already-uploaded study to a service request, called once all files for
-    # a study have finished uploading via `upload`/`upload-dicom-external`.
-    @extend_schema(request=DicomStudyLinkSpec)
-    @action(detail=False, methods=["post"], url_path="link-service-request")
-    def link_service_request(self, request):
-        request_data = DicomStudyLinkSpec.model_validate(request.data)
-
-        service_request = get_object_or_404(ServiceRequest, external_id=request_data.service_request_id)
-        if not AuthorizationController.call("can_write_service_request", request.user, service_request):
-            raise PermissionDenied("You do not have permission to update this service request")
-        self._authorize_write_radiology_data(service_request.facility)
-
-        try:
-            record = link_service_request_to_study(service_request, request_data.study_uid, user=request.user)
-        except WebhookConflictError as e:
-            return Response({"detail": e.message}, status=status.HTTP_409_CONFLICT)
-
-        return Response(
-            {
-                "detail": "Service request linked to study successfully",
-                "record": record,
-            },
-            status=status.HTTP_200_OK,
-        )
 
     def _studies_for_encounter(self, encounter_external_id, include_archived):
         encounter = get_object_or_404(Encounter, external_id=encounter_external_id)

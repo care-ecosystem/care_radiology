@@ -7,11 +7,6 @@ from pydantic import UUID4, BaseModel, Field, model_validator
 from care_radiology.models.dicom_study import DicomStudy
 
 
-class DicomStudyLinkSpec(BaseModel):
-    service_request_id: UUID4
-    study_uid: str = Field(min_length=1)
-
-
 class DicomStudiesQuerySpec(BaseModel):
     encounter_id: UUID4 | None = Field(None, alias="encounterId")
     service_request_id: UUID4 | None = Field(None, alias="serviceRequestId")

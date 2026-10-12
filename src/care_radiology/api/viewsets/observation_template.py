@@ -8,7 +8,6 @@ from care.emr.api.viewsets.base import (
     EMRBaseViewSet,
     EMRCreateMixin,
     EMRListMixin,
-    EMRRetrieveMixin,
     EMRUpdateMixin,
 )
 from care.facility.models import Facility
@@ -35,7 +34,6 @@ class ObservationTemplateFilters(filters.FilterSet):
 @extend_schema(tags=["Radiology: Observation Template"])
 class ObservationTemplateViewSet(
     EMRCreateMixin,
-    EMRRetrieveMixin,
     EMRUpdateMixin,
     EMRListMixin,
     EMRBaseViewSet,

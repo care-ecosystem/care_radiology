@@ -2,7 +2,7 @@ import logging
 
 from care.emr.models.device import Device
 from care.emr.models.service_request import ServiceRequest
-from django.db.models import Q
+from django.db.models import F, Q
 
 from care_radiology.utils.patient import get_patient_uhid
 
@@ -42,9 +42,11 @@ def get_service_requests(
         facility.external_id if facility else None,
     )
 
-    qs = ServiceRequest.objects.filter(filters).select_related(
-        "patient", "facility", "activity_definition", "created_by"
-    )[:limit]
+    qs = (
+        ServiceRequest.objects.filter(filters)
+        .select_related("patient", "facility", "activity_definition", "created_by")
+        .annotate(accession_number=F("radiology_service_requests__accession_number"))[:limit]
+    )
 
     results = []
     for sr in qs:
@@ -80,6 +82,7 @@ def get_service_requests(
                     "name": name,
                     "date": sr.created_date,
                     "meta": sr.meta,
+                    "accession_number": sr.accession_number,
                     "body_site": body_site,
                     "description": description,
                     "modality": modality,
