@@ -23,7 +23,7 @@ from care_radiology.constants import (
     VALID_MPPS_STATUSES,
 )
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest, RadiologyServiceRequestStatus
+from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.settings import plugin_settings
 from care_radiology.utils.dicom import (
     DICOM_TAG,
@@ -204,7 +204,7 @@ def upload_dicom_file(patient, dcm_file, user=None):
 
 def link_service_request_to_study(service_request, study_uid, user=None):
     with transaction.atomic():
-        rsr, _ = RadiologyServiceRequest.objects.get_or_create(
+        imaging_study, _ = ImagingStudy.objects.get_or_create(
             service_request=service_request, defaults={"encounter_id": service_request.encounter_id}
         )
 
@@ -218,7 +218,7 @@ def link_service_request_to_study(service_request, study_uid, user=None):
             is_archived=False,
             defaults={"created_by": user, "updated_by": user},
         )
-        if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
+        if study.imaging_study_id is not None and study.imaging_study_id != imaging_study.id:
             if plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
                 raise WebhookConflictError("Study is already linked to a different service request")
             logger.warning(
@@ -227,21 +227,21 @@ def link_service_request_to_study(service_request, study_uid, user=None):
                 service_request.external_id,
             )
 
-        if study.radiology_service_request_id != rsr.id:
-            study.radiology_service_request = rsr
-            update_fields = ["radiology_service_request", "modified_date"]
+        if study.imaging_study_id != imaging_study.id:
+            study.imaging_study = imaging_study
+            update_fields = ["imaging_study", "modified_date"]
             if user:
                 study.updated_by = user
                 update_fields.append("updated_by")
             study.save(update_fields=update_fields)
 
-        if rsr.status != RadiologyServiceRequestStatus.CANCELLED:
-            rsr.status = RadiologyServiceRequestStatus.COMPLETED
-            rsr.save(update_fields=["status"])
+        if imaging_study.status != ImagingStudyStatus.CANCELLED:
+            imaging_study.status = ImagingStudyStatus.COMPLETED
+            imaging_study.save(update_fields=["status"])
 
     return {
-        "external_id": rsr.external_id,
-        "status": rsr.status,
+        "external_id": imaging_study.external_id,
+        "status": imaging_study.status,
     }
 
 
@@ -258,10 +258,10 @@ def ensure_study_linked_to_service_request(service_request, study_uid, user=None
     linked_service_requests = set(
         DicomStudy.objects.filter(
             dicom_study_uid=study_uid,
-            radiology_service_request__isnull=False,
+            imaging_study__isnull=False,
             is_archived=False,
             deleted=False,
-        ).values_list("radiology_service_request__service_request__external_id", flat=True)
+        ).values_list("imaging_study__service_request__external_id", flat=True)
     )
 
     if service_request.external_id in linked_service_requests:
@@ -286,17 +286,17 @@ def process_study_webhook(data):
                 # Priority 1: Lookup by service_request_id (external_id)
                 sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
             elif data.get("accession_number"):
-                # Priority 2: Lookup by accession_number on RadiologyServiceRequest
+                # Priority 2: Lookup by accession_number on ImagingStudy
 
                 # If accession_number is duplicated across ServiceRequests, ignore older
                 # ones and use the most recently created match instead of failing:
-                rsr = (
-                    RadiologyServiceRequest.objects.filter(accession_number=data["accession_number"])
+                imaging_study = (
+                    ImagingStudy.objects.filter(accession_number=data["accession_number"])
                     .order_by("-created_date")
                     .select_related("service_request")
                     .first()
                 )
-                sr = rsr.service_request if rsr else None
+                sr = imaging_study.service_request if imaging_study else None
                 if sr is None:
                     raise ServiceRequest.DoesNotExist
             else:
@@ -374,16 +374,16 @@ def process_mpps_webhook(service_request_id, study_status):
             raise APIException("Error updating tags") from e
 
         if study_status == MPPS_STATUS_SCAN_STARTED:
-            rsr_status = RadiologyServiceRequestStatus.IN_PROGRESS
+            imaging_study_status = ImagingStudyStatus.IN_PROGRESS
         elif study_status == MPPS_STATUS_DISCONTINUED:
-            rsr_status = RadiologyServiceRequestStatus.CANCELLED
+            imaging_study_status = ImagingStudyStatus.CANCELLED
         else:
-            rsr_status = None
+            imaging_study_status = None
 
-        if rsr_status:
-            RadiologyServiceRequest.objects.filter(service_request=service_request).exclude(
-                status__in=[RadiologyServiceRequestStatus.COMPLETED, RadiologyServiceRequestStatus.CANCELLED]
-            ).update(status=rsr_status)
+        if imaging_study_status:
+            ImagingStudy.objects.filter(service_request=service_request).exclude(
+                status__in=[ImagingStudyStatus.COMPLETED, ImagingStudyStatus.CANCELLED]
+            ).update(status=imaging_study_status)
 
     logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
     logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
@@ -568,7 +568,9 @@ def archive_study(study, archive_reason, archived_by=None):
         study.save(update_fields=update_fields)
 
     # A re-upload of this study has to link its new record, not reuse the cached link.
-    rsr = study.radiology_service_request
-    if rsr is not None and rsr.service_request_id is not None:
-        cache.delete(DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study.dicom_study_uid, rsr.service_request.external_id))
+    imaging_study = study.imaging_study
+    if imaging_study is not None and imaging_study.service_request_id is not None:
+        cache.delete(
+            DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study.dicom_study_uid, imaging_study.service_request.external_id)
+        )
     return study

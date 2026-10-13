@@ -6,7 +6,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from care_radiology.models.accession_sequence import AccessionSequence
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.models.imaging_study import ImagingStudy
 
 logger = logging.getLogger(__name__)
 
@@ -57,23 +57,23 @@ def assign_accession_number(service_request_id: str):
 
     try:
         with transaction.atomic():
-            rsr = (
-                RadiologyServiceRequest.objects.select_for_update(of=("self",))
+            imaging_study = (
+                ImagingStudy.objects.select_for_update(of=("self",))
                 .select_related("service_request__facility")
                 .get(service_request_id=service_request_id)
             )
-            if not rsr.accession_number:
-                rsr.accession_number = generate_accession_number(rsr.service_request)
-                rsr.save(update_fields=["accession_number"])
+            if not imaging_study.accession_number:
+                imaging_study.accession_number = generate_accession_number(imaging_study.service_request)
+                imaging_study.save(update_fields=["accession_number"])
 
         logger.info(
             "Accession number %s set for service request %s",
-            rsr.accession_number,
+            imaging_study.accession_number,
             service_request_id,
         )
-    except RadiologyServiceRequest.DoesNotExist:
+    except ImagingStudy.DoesNotExist:
         logger.error(
-            "RadiologyServiceRequest for service request %s not found.",
+            "ImagingStudy for service request %s not found.",
             service_request_id,
         )
     except Exception:

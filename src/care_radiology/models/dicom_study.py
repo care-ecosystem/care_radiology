@@ -2,13 +2,13 @@ from care.emr.models import EMRBaseModel
 from care.emr.models.patient import Patient
 from django.db import models
 
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.models.imaging_study import ImagingStudy
 
 
 class DicomStudy(EMRBaseModel):
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="dicom_studies")
-    radiology_service_request = models.ForeignKey(
-        RadiologyServiceRequest,
+    imaging_study = models.ForeignKey(
+        ImagingStudy,
         on_delete=models.CASCADE,
         related_name="studies",
         null=True,

@@ -26,7 +26,7 @@ from care_radiology.api.specs.dicom import (
 )
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.models.imaging_study import ImagingStudy
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
@@ -61,9 +61,9 @@ class DicomViewSet(ViewSet):
             raise PermissionDenied("You do not have permission to write radiology data for this facility")
 
     def _resolve_facility_for_archive(self, study):
-        if not (study.radiology_service_request and study.radiology_service_request.service_request):
+        if not (study.imaging_study and study.imaging_study.service_request):
             raise ValidationError({"detail": "Cannot archive a study that is not linked to a service request"})
-        return study.radiology_service_request.service_request.facility
+        return study.imaging_study.service_request.facility
 
     def _handle_dicom_upload(self, patient, dcm_file, service_request=None, user=None):
         try:
@@ -133,7 +133,7 @@ class DicomViewSet(ViewSet):
             )
 
         expected_accession_number = (
-            RadiologyServiceRequest.objects.filter(service_request=service_request)
+            ImagingStudy.objects.filter(service_request=service_request)
             .values_list("accession_number", flat=True)
             .first()
         )
@@ -220,11 +220,10 @@ class DicomViewSet(ViewSet):
     @action(
         detail=False,
         methods=["post"],
-        url_path="upload-dicom-external",
         authentication_classes=[StaticAPIKeyAuthentication],
         permission_classes=[StaticAPIKeyAuthorization],
     )
-    def upload_with_key(self, request):
+    def upload_dicom_external(self, request):
         dcm_file = request.FILES.get("file")
         patient_id = request.data.get("patient_id")
 
@@ -248,16 +247,16 @@ class DicomViewSet(ViewSet):
         self._authorize_read_radiology_data(encounter.facility)
 
         qs = DicomStudy.objects.filter(
-            radiology_service_request__service_request__encounter=encounter,
-            radiology_service_request__service_request__deleted=False,
-            radiology_service_request__service_request__status__in=[
+            imaging_study__service_request__encounter=encounter,
+            imaging_study__service_request__deleted=False,
+            imaging_study__service_request__status__in=[
                 ServiceRequestStatusChoices.active.value,
                 ServiceRequestStatusChoices.completed.value,
             ],
             deleted=False,
             dicom_study_uid__isnull=False,
         ).select_related(
-            "radiology_service_request__service_request", "created_by", "updated_by", "archived_by"
+            "imaging_study__service_request", "created_by", "updated_by", "archived_by"
         )
         if not include_archived:
             qs = qs.filter(is_archived=False)
@@ -271,11 +270,11 @@ class DicomViewSet(ViewSet):
         self._authorize_read_radiology_data(service_request.facility)
 
         qs = DicomStudy.objects.filter(
-            radiology_service_request__service_request=service_request,
+            imaging_study__service_request=service_request,
             deleted=False,
             dicom_study_uid__isnull=False,
         ).select_related(
-            "radiology_service_request__service_request", "created_by", "updated_by", "archived_by"
+            "imaging_study__service_request", "created_by", "updated_by", "archived_by"
         )
         if not include_archived:
             qs = qs.filter(is_archived=False)
@@ -286,7 +285,7 @@ class DicomViewSet(ViewSet):
     def archive(self, request, pk=None):
         study = get_object_or_404(
             DicomStudy.objects.select_related(
-                "radiology_service_request__service_request__facility", "created_by", "updated_by"
+                "imaging_study__service_request__facility", "created_by", "updated_by"
             ),
             external_id=pk,
         )
@@ -313,9 +312,9 @@ class DicomViewSet(ViewSet):
             studies = self._studies_for_encounter(query.encounter_id, query.include_archived)
 
         service_request_ids = {
-            study.radiology_service_request.service_request_id
+            study.imaging_study.service_request_id
             for study in studies
-            if study.radiology_service_request and study.radiology_service_request.service_request_id
+            if study.imaging_study and study.imaging_study.service_request_id
         }
         latest_report_id_by_sr_id = {
             row["service_request_id"]: row["external_id"]
@@ -339,7 +338,7 @@ class DicomViewSet(ViewSet):
                         user = getattr(study, field)
                         result[field] = DicomStudyUserSpec.serialize(user).to_json() if user else None
 
-                    sr = study.radiology_service_request.service_request if study.radiology_service_request else None
+                    sr = study.imaging_study.service_request if study.imaging_study else None
                     if sr:
                         dr_id = latest_report_id_by_sr_id.get(sr.id)
                         result["service_request"] = {

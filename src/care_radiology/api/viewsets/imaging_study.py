@@ -1,0 +1,56 @@
+from care.emr.api.viewsets.base import EMRBaseViewSet, EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin
+from care.emr.models.encounter import Encounter
+from care.security.authorization.base import AuthorizationController
+from care.utils.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
+from rest_framework.exceptions import PermissionDenied, ValidationError
+
+from care_radiology.api.specs.imaging_study import (
+    ImagingStudyReadSpec,
+    ImagingStudyUpdateSpec,
+)
+from care_radiology.models.imaging_study import ImagingStudy
+
+
+@extend_schema(tags=["Radiology: Imaging Study"])
+class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet):
+    database_model = ImagingStudy
+    pydantic_read_model = ImagingStudyReadSpec
+    pydantic_retrieve_model = ImagingStudyReadSpec
+    pydantic_update_model = ImagingStudyUpdateSpec
+    lookup_field = "service_request__external_id"
+
+    def authorize_retrieve(self, model_instance):
+        service_request = model_instance.service_request
+        if not AuthorizationController.call("can_read_service_request", self.request.user, service_request):
+            raise PermissionDenied("You do not have permission to view this service request")
+        if not AuthorizationController.call("can_read_radiology_data", self.request.user, service_request.facility):
+            raise PermissionDenied("You do not have permission to read radiology data for this facility")
+
+    def authorize_update(self, request_obj, model_instance):
+        if not AuthorizationController.call(
+            "can_write_radiology_data", self.request.user, model_instance.service_request.facility
+        ):
+            raise PermissionDenied("You do not have permission to write radiology data for this facility")
+
+    def get_queryset(self):
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related("encounter", "service_request__facility", "service_request__activity_definition")
+            .prefetch_related("service_request__diagnosticreport_set")
+        )
+        if self.action != "list":
+            return queryset
+
+        encounter_id = self.request.GET.get("encounter")
+        if not encounter_id:
+            raise ValidationError("encounter is required")
+
+        encounter = get_object_or_404(Encounter, external_id=encounter_id)
+        if not AuthorizationController.call("can_view_service_request_for_encounter", self.request.user, encounter):
+            raise PermissionDenied("You do not have permission to view service requests for this encounter")
+        if not AuthorizationController.call("can_read_radiology_data", self.request.user, encounter.facility):
+            raise PermissionDenied("You do not have permission to read radiology data for this facility")
+
+        return queryset.filter(encounter=encounter)

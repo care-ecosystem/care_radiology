@@ -6,28 +6,28 @@ from care.emr.models.encounter import Encounter
 from care.emr.models.service_request import ServiceRequest
 
 
-class RadiologyServiceRequestStatus(models.TextChoices):
+class ImagingStudyStatus(models.TextChoices):
     ACTIVE = "ACTIVE"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
 
 
-class RadiologyServiceRequest(BaseModel):
+class ImagingStudy(BaseModel):
     service_request = models.OneToOneField(
         ServiceRequest,
         on_delete=models.CASCADE,
-        related_name="radiology_service_requests",
+        related_name="imaging_study",
         null=True,
     )
     encounter = models.ForeignKey(
         Encounter,
         on_delete=models.CASCADE,
-        related_name="radiology_service_requests",
+        related_name="imaging_studies",
     )
     accession_number = models.CharField(max_length=100, null=True, blank=True, db_index=True)
     status = models.CharField(
         max_length=20,
-        choices=RadiologyServiceRequestStatus.choices,
-        default=RadiologyServiceRequestStatus.ACTIVE,
+        choices=ImagingStudyStatus.choices,
+        default=ImagingStudyStatus.ACTIVE,
     )

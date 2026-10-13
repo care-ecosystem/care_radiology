@@ -45,7 +45,7 @@ def get_service_requests(
     qs = (
         ServiceRequest.objects.filter(filters)
         .select_related("patient", "facility", "activity_definition", "created_by")
-        .annotate(accession_number=F("radiology_service_requests__accession_number"))[:limit]
+        .annotate(accession_number=F("imaging_study__accession_number"))[:limit]
     )
 
     results = []

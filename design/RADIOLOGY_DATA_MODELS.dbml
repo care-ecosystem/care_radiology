@@ -2,10 +2,10 @@
 // Foreign keys use integer id; external_id UUID for API exposure
 
 // ============================================================================
-// RADIOLOGY SERVICE REQUEST - Service Request Linkage (1:1 relationship)
+// IMAGING STUDY - Service Request Linkage (1:1 relationship)
 // Links a CARE ServiceRequest to radiology-specific metadata and DICOM studies
 // ============================================================================
-Table radiology_servicerequest {
+Table radiology_imagingstudy {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
   service_request_id INTEGER [not null, unique, note: 'FK to emr.ServiceRequest.id (1:1). ON DELETE CASCADE']
@@ -26,8 +26,8 @@ Table radiology_servicerequest {
   }
 }
 
-Ref service_request_fk: radiology_servicerequest.service_request_id ?> emr_servicerequest.id
-Ref service_request_encounter: radiology_servicerequest.encounter_id ?> emr_encounter.id
+Ref service_request_fk: radiology_imagingstudy.service_request_id ?> emr_servicerequest.id
+Ref service_request_encounter: radiology_imagingstudy.encounter_id ?> emr_encounter.id
 
 // ============================================================================
 // DICOM STUDY - DICOM Study Records (N:1 relationship)
@@ -37,7 +37,7 @@ Table radiology_dicomstudy {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
   patient_id INTEGER [not null, note: 'FK to emr.Patient.id. ON DELETE CASCADE']
-  radiology_service_request_id INTEGER [null, note: 'FK to radiology_servicerequest.id. ON DELETE CASCADE']
+  imaging_study_id INTEGER [null, note: 'FK to radiology_imagingstudy.id. ON DELETE CASCADE']
 
   dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient']
 
@@ -58,14 +58,14 @@ Table radiology_dicomstudy {
 
   indexes {
     patient_id
-    radiology_service_request_id
+    imaging_study_id
     deleted
     (patient_id, dicom_study_uid) [unique, note: 'Each study unique per patient']
   }
 }
 
 Ref dicom_study_patient: radiology_dicomstudy.patient_id ?> emr_patient.id
-Ref dicom_study_service_request: radiology_dicomstudy.radiology_service_request_id ?> radiology_servicerequest.id
+Ref dicom_study_service_request: radiology_dicomstudy.imaging_study_id ?> radiology_imagingstudy.id
 Ref dicom_study_created_by: radiology_dicomstudy.created_by_id ?> care_user.id
 Ref dicom_study_updated_by: radiology_dicomstudy.updated_by_id ?> care_user.id
 Ref dicom_study_archived_by: radiology_dicomstudy.archived_by_id ?> care_user.id
