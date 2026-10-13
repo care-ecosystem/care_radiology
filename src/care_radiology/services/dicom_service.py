@@ -278,55 +278,6 @@ def ensure_study_linked_to_service_request(service_request, study_uid, user=None
     return newly_linked
 
 
-def process_study_webhook(data):
-    # Support lookup by either service_request_id or accession_number
-    if (data.get("service_request_id") or data.get("accession_number")) and data.get("study_id"):
-        try:
-            if data.get("service_request_id"):
-                # Priority 1: Lookup by service_request_id (external_id)
-                sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
-            elif data.get("accession_number"):
-                # Priority 2: Lookup by accession_number on ImagingStudy
-
-                # If accession_number is duplicated across ServiceRequests, ignore older
-                # ones and use the most recently created match instead of failing:
-                imaging_study = (
-                    ImagingStudy.objects.filter(accession_number=data["accession_number"])
-                    .order_by("-created_date")
-                    .select_related("service_request")
-                    .first()
-                )
-                sr = imaging_study.service_request if imaging_study else None
-                if sr is None:
-                    raise ServiceRequest.DoesNotExist
-            else:
-                raise WebhookConflictError("No service_request_id or accession_number provided")
-        except ServiceRequest.DoesNotExist:
-            raise WebhookConflictError("No matching service request")
-
-        return link_service_request_to_study(sr, data["study_id"])
-
-    elif data.get("patient_id") and data.get("study_id"):
-        from care.emr.models.patient import Patient
-
-        patient = Patient.objects.filter(instance_identifiers__contains=[{"value": data.get("patient_id")}]).first()
-        if not patient:
-            raise WebhookConflictError("No matching patient")
-
-        with transaction.atomic():
-            _lock_study_uid(data.get("study_id"))
-            (study, _) = DicomStudy.objects.get_or_create(
-                dicom_study_uid=data.get("study_id"), patient=patient, is_archived=False, defaults={}
-            )
-
-        return {
-            "external_id": study.external_id,
-            "data": data,
-        }
-
-    return None
-
-
 def process_mpps_webhook(service_request_id, study_status):
     if study_status not in VALID_MPPS_STATUSES:
         logger.warning("[MPPS] Unexpected status: %s", study_status)

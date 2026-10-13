@@ -180,14 +180,11 @@ class DicomViewSet(ViewSet):
 
     @action(detail=False, methods=["post"], url_path="upload")
     def upload(self, request):
-        facility_id = request.data.get("facility_id")
         patient_id = request.data.get("patient_id")
         service_request_id = request.data.get("service_request_id")
         dcm_file = request.FILES.get("file")
 
         errors = {}
-        if not facility_id:
-            errors["facility_id"] = "This value is required"
         if not patient_id:
             errors["patient_id"] = "This value is required"
         if not service_request_id:
@@ -200,12 +197,12 @@ class DicomViewSet(ViewSet):
             raise ValidationError(errors)
 
         patient = get_object_or_404(Patient, external_id=patient_id)
-        facility = get_object_or_404(Facility, external_id=facility_id)
         service_request = get_object_or_404(ServiceRequest, external_id=service_request_id)
 
         if service_request.patient_id != patient.id:
             raise ValidationError({"service_request_id": "Service request does not belong to this patient"})
 
+        self._authorize_write_radiology_data(service_request.facility)
 
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
             error_response = self._validate_accession_number(dcm_file, service_request)
@@ -237,7 +234,29 @@ class DicomViewSet(ViewSet):
 
         patient = get_object_or_404(Patient, external_id=patient_id)
 
-        return self._handle_dicom_upload(patient, dcm_file)
+        # The modality only knows the accession number it got from the worklist, so the
+        # service request is found by it. Without a match the study is uploaded unlinked.
+        try:
+            accession_number = read_accession_number(dcm_file)
+        except DicomParseError as e:
+            logger.warning("Could not read the accession number from an external DICOM upload: %s", e.message)
+            accession_number = None
+
+        imaging_study = None
+        if accession_number:
+            imaging_study = (
+                ImagingStudy.objects.filter(
+                    accession_number=accession_number,
+                    service_request__patient=patient,
+                    service_request__deleted=False,
+                )
+                .select_related("service_request")
+                .order_by("-created_date")
+                .first()
+            )
+        service_request = imaging_study.service_request if imaging_study else None
+
+        return self._handle_dicom_upload(patient, dcm_file, service_request=service_request)
 
     def _studies_for_encounter(self, encounter_external_id, include_archived):
         encounter = get_object_or_404(Encounter, external_id=encounter_external_id)

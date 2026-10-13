@@ -37,6 +37,7 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
         queryset = (
             super()
             .get_queryset()
+            .filter(service_request__deleted=False)
             .select_related("encounter", "service_request__facility", "service_request__activity_definition")
             .prefetch_related("service_request__diagnosticreport_set")
         )

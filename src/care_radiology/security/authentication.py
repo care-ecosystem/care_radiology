@@ -8,7 +8,6 @@ from rest_framework.permissions import BasePermission
 from care_radiology.settings import plugin_settings
 
 _RATE_LIMIT_SETTING_BY_URL_NAME = {
-    "radiology_webhooks-study": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STUDY",
     "radiology_webhooks-status": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS",
     "radiology_dicom-worklist": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST",
     "radiology_dicom-upload-dicom-external": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL",

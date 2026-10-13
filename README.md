@@ -128,8 +128,8 @@ The plugin validates DICOM uploads and study links before accepting them. Each c
 | Setting | Default | What it validates |
 | --- | --- | --- |
 | `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE` | `False` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
-| `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) to the `upload` endpoint whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. `upload_dicom_external` has no service request and is not checked. |
-| `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to uploads and the study webhook. |
+| `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) to the `upload` endpoint whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. `upload_dicom_external` is not checked; it uses the accession number to find the service request to link. |
+| `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to both upload endpoints. |
 
 When a check is disabled, a warning is logged for each request that skips it. Disabling a check has these effects:
 

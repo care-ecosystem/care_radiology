@@ -7,17 +7,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
-from care_radiology.api.specs.webhooks import WebhookMppsSpec, WebhookStudySpec
+from care_radiology.api.specs.webhooks import WebhookMppsSpec
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
 )
-from care_radiology.services.dicom_service import (
-    WebhookConflictError,
-    process_mpps_webhook,
-    process_study_webhook,
-)
+from care_radiology.services.dicom_service import process_mpps_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -26,30 +22,6 @@ logger = logging.getLogger(__name__)
 class WebhookViewSet(ViewSet):
     def get_exception_handler(self):
         return emr_exception_handler
-
-    # DICOM study completion webhook, links an uploaded study to a service request.
-    @extend_schema(request=WebhookStudySpec)
-    @action(
-        detail=False,
-        methods=["post"],
-        url_path="study",
-        authentication_classes=[StaticAPIKeyAuthentication],
-        permission_classes=[StaticAPIKeyAuthorization],
-    )
-    def save_webhook(self, request):
-        data = request.data
-        RadiologyWebhookLogs.objects.create(raw_data=data, type="SR-STUDY-INSERT")
-        WebhookStudySpec.model_validate(data)
-
-        try:
-            record = process_study_webhook(data)
-        except WebhookConflictError as e:
-            return Response({"detail": e.message}, status=status.HTTP_409_CONFLICT)
-
-        return Response(
-            {"detail": "Webhook received and saved successfully", **({"record": record} if record is not None else {})},
-            status=status.HTTP_200_OK,
-        )
 
     # MPPS status update, mapped to a ServiceRequest tag.
     @extend_schema(request=WebhookMppsSpec)
