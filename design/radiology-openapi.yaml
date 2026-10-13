@@ -6,7 +6,7 @@ info:
 
     This plugin enables radiology workflows within CARE:
     - Upload DICOM files and link them to CARE service requests
-    - Read imaging studies with their encounter and core service request
+    - Read imaging studies with their encounter, core service request and DICOM studies
     - Serve a DICOM modality worklist and receive MPPS status webhooks from the
       DICOM modality worklist server
     - Manage per-facility observation templates used to structure diagnostic report
@@ -15,12 +15,13 @@ info:
     **Care Plugin Conventions:**
     - All `id` / `external_id` fields exposed via API are UUIDs (the table's `external_id`).
       The internal BigInt PK is never exposed.
-    - All FK reference fields exposed via API are UUIDs (the referenced record's `external_id`).
+    - FK reference fields are exposed as UUIDs (the referenced record's `external_id`) or as
+      nested objects whose `id` is that UUID.
     - `created_by` / `updated_by` are nested user objects, not bare IDs.
 
     **Authentication:**
     - Standard CARE endpoints use JWT Bearer auth (Authorization: Bearer <token>).
-    - DICOM worklist and webhook endpoints use a static API key
+    - The DICOM worklist, the external upload and the webhook endpoints use a static API key
       (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
 
   version: 1.0.0
@@ -42,7 +43,7 @@ tags:
   - name: Observation Templates
     description: Manage per-facility reusable observation templates used to structure diagnostic report observations
   - name: Imaging Study
-    description: Read imaging studies (status, accession number) with their encounter and core service request, and update their status
+    description: Read imaging studies (status, accession number) with their encounter, core service request and DICOM studies, and update their status
 
 security:
   - BearerAuth: []
@@ -722,8 +723,8 @@ paths:
           schema:
             type: string
         - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Paginated list of observation templates
@@ -857,21 +858,6 @@ components:
       schema:
         type: string
         format: uuid
-    Page:
-      name: page
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        default: 1
-    PageSize:
-      name: page_size
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 100
-        default: 20
     Limit:
       name: limit
       in: query
@@ -898,20 +884,6 @@ components:
 
   schemas:
     # ===================== Shared =====================
-    LiteUser:
-      type: object
-      description: Minimal user representation used in created_by / updated_by fields
-      properties:
-        external_id:
-          type: string
-          format: uuid
-        first_name:
-          type: string
-        last_name:
-          type: string
-        username:
-          type: string
-
     PaginatedMeta:
       type: object
       description: CARE's `CareLimitOffsetPagination` body, which has no `next` / `previous` links
@@ -953,12 +925,14 @@ components:
 
     DicomStudyDetail:
       type: object
-      description: DICOM study metadata fetched from DCM4CHEE, combined with CARE record fields
+      description: |
+        DICOM study metadata fetched from DCM4CHEE (cached for an hour) plus the CARE record's
+        id, as returned in the upload responses' `study`
       properties:
-        external_id:
+        id:
           type: string
           format: uuid
-          description: CARE DicomStudy external_id
+          description: DicomStudy external_id
         study_uid:
           type: string
           description: DICOM Study Instance UID
@@ -983,17 +957,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
-        is_archived:
-          type: boolean
-          description: Whether this study has been archived.
-        archive_reason:
-          type: string
-          description: Reason the study was archived. Empty string when the study is not archived.
-          example: "Duplicate upload, superseded by a later study"
-        archived_datetime:
-          type: string
-          format: date-time
-          nullable: true
 
     DicomStudyArchiveRequest:
       type: object
@@ -1007,13 +970,13 @@ components:
 
     DicomStudyArchiveState:
       type: object
-      description: DB-only view of a DicomStudy's archive state, returned by the archive action
+      description: DB-only view of a DicomStudy (`DicomStudyArchiveStateSpec`), returned by the archive action
       properties:
         id:
           type: string
           format: uuid
           description: DicomStudy external_id
-        dicom_study_uid:
+        study_uid:
           type: string
           description: DICOM Study Instance UID
         is_archived:
@@ -1024,8 +987,17 @@ components:
           type: string
           format: date-time
           nullable: true
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
         archived_by:
-          $ref: '#/components/schemas/LiteUser'
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
           nullable: true
 
     WorklistEntry:
@@ -1109,8 +1081,9 @@ components:
     ImagingStudyListItem:
       type: object
       description: |
-        List body of an ImagingStudy. Every nested object uses a core base spec (columns only),
-        so a page costs no queries per row.
+        List body of an ImagingStudy (`ImagingStudyReadSpec`). `encounter` and `service_request`
+        use core base specs; the newest report and the studies are prefetched for the whole
+        page, and each study's DCM4CHEE details come from a one-hour cache.
       required:
         - id
         - status
@@ -1134,6 +1107,19 @@ components:
             - $ref: '#/components/schemas/ImagingStudyServiceRequest'
           nullable: true
           description: Null when the ImagingStudy has no linked ServiceRequest
+        diagnostic_report:
+          allOf:
+            - $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
+          nullable: true
+          description: The service request's newest DiagnosticReport; null when it has none
+        studies:
+          type: array
+          description: |
+            DICOM studies linked to this imaging study, newest first, with live metadata from
+            DCM4CHEE (cached for an hour). Archived studies are included with `is_archived`.
+            Studies DCM4CHEE cannot return are left out.
+          items:
+            $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
     ImagingStudyServiceRequest:
       type: object
@@ -1185,8 +1171,9 @@ components:
     ImagingStudy:
       type: object
       description: |
-        Retrieve (and PATCH) body of an ImagingStudy, linked 1:1 to a CARE ServiceRequest.
-        Same as `ImagingStudyListItem`, except `service_request` is the full core retrieve body.
+        Retrieve (and PATCH) body of an ImagingStudy (`ImagingStudyRetrieveSpec`), linked 1:1 to
+        a CARE ServiceRequest. Same as `ImagingStudyListItem`, except `service_request` is the
+        core retrieve body.
       required:
         - id
         - status
@@ -1213,6 +1200,19 @@ components:
             - $ref: '#/components/schemas/ImagingStudyServiceRequestDetail'
           nullable: true
           description: Null when the ImagingStudy has no linked ServiceRequest
+        diagnostic_report:
+          allOf:
+            - $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
+          nullable: true
+          description: The service request's newest DiagnosticReport; null when it has none
+        studies:
+          type: array
+          description: |
+            DICOM studies linked to this imaging study, newest first, with live metadata from
+            DCM4CHEE (cached for an hour). Archived studies are included with `is_archived`.
+            Studies DCM4CHEE cannot return are left out.
+          items:
+            $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
     ImagingStudyServiceRequestDetail:
       description: |
@@ -1287,6 +1287,107 @@ components:
           type: string
           nullable: true
         discharge_summary_advice:
+          type: string
+          nullable: true
+
+    ImagingStudyDicomStudy:
+      type: object
+      description: A DICOM study as returned inside an ImagingStudy (`DicomStudyReadSpec`)
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: DicomStudy external_id
+        study_uid:
+          type: string
+          description: DICOM Study Instance UID
+          example: "1.2.840.10008.5.1.4.1.1.2.1234567890"
+        study_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: Study date/time in ISO 8601 format, from DCM4CHEE
+          example: "2026-06-01T10:30:00"
+        study_description:
+          type: string
+          nullable: true
+          example: "CHEST PA"
+        study_modalities:
+          type: array
+          items:
+            type: string
+          example: ["CT"]
+        study_series:
+          type: array
+          items:
+            $ref: '#/components/schemas/DicomSeries'
+        is_archived:
+          type: boolean
+        archive_reason:
+          type: string
+          description: Empty string when the study is not archived
+        archived_datetime:
+          type: string
+          format: date-time
+          nullable: true
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        archived_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+
+    ImagingStudyDiagnosticReport:
+      type: object
+      description: Core CARE DiagnosticReport, serialized with core `DiagnosticReportSpecBase`
+      required:
+        - id
+        - status
+        - category
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: DiagnosticReport external_id
+        status:
+          type: string
+        category:
+          type: object
+          description: Coding (system, code, display)
+        code:
+          type: object
+          nullable: true
+          description: Coding (system, code, display)
+        note:
+          type: string
+          nullable: true
+        conclusion:
+          type: string
+          nullable: true
+
+    DicomStudyUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: User external_id
+        username:
+          type: string
+        prefix:
+          type: string
+          nullable: true
+        first_name:
+          type: string
+        last_name:
+          type: string
+        suffix:
           type: string
           nullable: true
 

@@ -2,6 +2,7 @@ from care.emr.api.viewsets.base import EMRBaseViewSet, EMRListMixin, EMRRetrieve
 from care.emr.models.encounter import Encounter
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
+from django.db.models import Prefetch
 from drf_spectacular.utils import extend_schema
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -10,6 +11,7 @@ from care_radiology.api.specs.imaging_study import (
     ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
 )
+from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy
 
 
@@ -40,6 +42,15 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
             .get_queryset()
             .filter(service_request__deleted=False)
             .select_related("encounter", "service_request__facility")
+            .prefetch_related(
+                "service_request__diagnosticreport_set",
+                Prefetch(
+                    "studies",
+                    queryset=DicomStudy.objects.filter(dicom_study_uid__isnull=False)
+                    .select_related("created_by", "updated_by", "archived_by")
+                    .order_by("-created_date"),
+                ),
+            )
         )
         if self.action != "list":
             return queryset.select_related(

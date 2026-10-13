@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 import requests
@@ -357,10 +358,10 @@ def fetch_study(dicom_study):
     study_uid = dicom_study.dicom_study_uid
     key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
     # The cache is per Study UID, which an archived record and its re-upload share, so the
-    # record's own external_id is added on every return rather than cached.
+    # record's own id is added on every return rather than cached.
     cached = cache.get(key)
     if cached:
-        return {**cached, "external_id": dicom_study.external_id}
+        return {**cached, "id": dicom_study.external_id}
 
     study = d_query_study(study_uid)
 
@@ -407,7 +408,19 @@ def fetch_study(dicom_study):
     }
 
     cache.set(key, cachable, timeout=60 * 60)
-    return {**cachable, "external_id": dicom_study.external_id}
+    return {**cachable, "id": dicom_study.external_id}
+
+
+def fetch_studies(dicom_studies):
+    if not dicom_studies:
+        return []
+    with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
+        details = list(executor.map(fetch_study, dicom_studies))
+    return [
+        (study, study_details)
+        for study, study_details in zip(dicom_studies, details, strict=True)
+        if study_details is not None
+    ]
 
 
 def _pacs_delete_timeout():

@@ -8,10 +8,10 @@
 Table radiology_imagingstudy {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
-  service_request_id INTEGER [not null, unique, note: 'FK to emr.ServiceRequest.id (1:1). ON DELETE CASCADE']
-  encounter_id INTEGER [not null, note: 'FK to emr.Encounter.id, copied from service_request.encounter. ON DELETE CASCADE']
+  service_request_id INTEGER [null, unique, note: 'FK to emr.ServiceRequest.id (1:1). ON DELETE CASCADE. Set on every row the plugin creates']
+  encounter_id INTEGER [not null, note: 'FK to emr.Encounter.id, set from service_request.encounter on create. ON DELETE CASCADE']
 
-  accession_number VARCHAR(100) [null, note: 'Only copy of the accession number; lookup key for study webhooks']
+  accession_number VARCHAR(100) [null, note: 'Only copy of the accession number; upload_dicom_external finds the imaging study by it']
   status VARCHAR(20) [not null, default: 'ACTIVE', note: 'ACTIVE, IN_PROGRESS, COMPLETED, or CANCELLED']
 
   created_date TIMESTAMP [not null, note: "indexed"]
@@ -39,7 +39,7 @@ Table radiology_dicomstudy {
   patient_id INTEGER [not null, note: 'FK to emr.Patient.id. ON DELETE CASCADE']
   imaging_study_id INTEGER [null, note: 'FK to radiology_imagingstudy.id. ON DELETE CASCADE']
 
-  dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient']
+  dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient among non-archived studies. Exposed via API as study_uid']
 
   is_archived BOOLEAN [default: false, note: 'Soft-hide flag, set via the archive action']
   archive_reason TEXT [not null, default: '', note: 'Reason supplied when archived']
@@ -60,12 +60,12 @@ Table radiology_dicomstudy {
     patient_id
     imaging_study_id
     deleted
-    (patient_id, dicom_study_uid) [unique, note: 'Each study unique per patient']
+    (patient_id, dicom_study_uid) [unique, note: 'unique_patient_active_study_uid: partial, only where is_archived = false']
   }
 }
 
 Ref dicom_study_patient: radiology_dicomstudy.patient_id ?> emr_patient.id
-Ref dicom_study_service_request: radiology_dicomstudy.imaging_study_id ?> radiology_imagingstudy.id
+Ref dicom_study_imaging_study: radiology_dicomstudy.imaging_study_id ?> radiology_imagingstudy.id
 Ref dicom_study_created_by: radiology_dicomstudy.created_by_id ?> care_user.id
 Ref dicom_study_updated_by: radiology_dicomstudy.updated_by_id ?> care_user.id
 Ref dicom_study_archived_by: radiology_dicomstudy.archived_by_id ?> care_user.id
@@ -78,7 +78,7 @@ Table radiology_webhook_logs {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
 
-  type VARCHAR(50) [not null, note: 'Webhook event type']
+  type VARCHAR(50) [not null, note: 'Webhook event type: MPPS (older rows may hold SR-STUDY-INSERT from the removed study webhook)']
   raw_data JSON [not null, note: 'Raw webhook payload received']
 
   created_date TIMESTAMP [not null, note: "indexed"]
@@ -163,13 +163,13 @@ Table radiology_accessionsequence {
   id INTEGER [pk, increment]
   facility_id INTEGER [not null, note: 'FK to care_facility.id. ON DELETE CASCADE']
 
-  modality_code VARCHAR(100) [not null, default: '', note: 'DICOM modality code (e.g., CT, MR, XC)']
+  modality_code VARCHAR(100) [not null, note: 'Service request code.code, truncated to 100 characters (blank allowed)']
   year SMALLINT [not null, note: 'Year for accession sequence']
   last_value INTEGER [not null, default: 0, note: 'Last accession sequence value issued']
 
   indexes {
     facility_id
-    (facility_id, modality_code, year) [unique]
+    (facility_id, modality_code, year) [unique, note: 'uniq_facility_modality_year']
   }
 }
 
