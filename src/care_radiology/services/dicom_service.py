@@ -412,10 +412,17 @@ def fetch_study(dicom_study):
 
 
 def fetch_studies(dicom_studies):
+    def fetch_or_none(dicom_study):
+        try:
+            return fetch_study(dicom_study)
+        except Exception:
+            logger.exception("Could not fetch study %s from PACS", dicom_study.dicom_study_uid)
+            return None
+
     if not dicom_studies:
         return []
     with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
-        details = list(executor.map(fetch_study, dicom_studies))
+        details = list(executor.map(fetch_or_none, dicom_studies))
     return [
         (study, study_details)
         for study, study_details in zip(dicom_studies, details, strict=True)

@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 
 import requests
+from django.utils import timezone
 
 from care_radiology.constants import DCM4CHEE_BASEURL
 from care_radiology.settings import plugin_settings
@@ -141,7 +142,7 @@ def d_datetime_to_iso(da, tm=None):
     else:
         dt = datetime(year, month, day)
 
-    return dt.isoformat()
+    return timezone.make_aware(dt).isoformat()
 
 
 def parse_date(date_str):

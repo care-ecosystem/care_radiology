@@ -37,20 +37,24 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
             raise PermissionDenied("You do not have permission to write radiology data for this facility")
 
     def get_queryset(self):
+        include_archived = self.request.GET.get("include_archived", "false").lower()
+        if include_archived not in ("true", "false"):
+            raise ValidationError({"include_archived": "Must be true or false"})
+
+        studies = (
+            DicomStudy.objects.filter(dicom_study_uid__isnull=False)
+            .select_related("created_by", "updated_by", "archived_by")
+            .order_by("-created_date")
+        )
+        if include_archived == "false":
+            studies = studies.filter(is_archived=False)
+
         queryset = (
             super()
             .get_queryset()
             .filter(service_request__deleted=False)
             .select_related("encounter", "service_request__facility")
-            .prefetch_related(
-                "service_request__diagnosticreport_set",
-                Prefetch(
-                    "studies",
-                    queryset=DicomStudy.objects.filter(dicom_study_uid__isnull=False)
-                    .select_related("created_by", "updated_by", "archived_by")
-                    .order_by("-created_date"),
-                ),
-            )
+            .prefetch_related("service_request__diagnosticreport_set", Prefetch("studies", queryset=studies))
         )
         if self.action != "list":
             return queryset.select_related(

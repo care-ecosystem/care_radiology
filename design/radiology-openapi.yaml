@@ -547,6 +547,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -557,15 +558,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing'
+          description: '`encounter` is missing, or `include_archived` is not `true`/`false`'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "validation_error"
-                    msg: "encounter is required"
+              examples:
+                missing_encounter:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg: "encounter is required"
+                invalid_include_archived:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          include_archived: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -602,6 +611,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
       responses:
         '200':
           description: Imaging study metadata
@@ -609,6 +619,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
+        '400':
+          description: '`include_archived` is not `true`/`false`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "validation_error"
+                    msg:
+                      include_archived: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -643,6 +664,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
       requestBody:
         required: true
         content:
@@ -659,7 +681,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
         '400':
-          description: '`status` is missing or not one of the allowed values'
+          description: '`status` is missing or not one of the allowed values, or `include_archived` is not `true`/`false`'
           content:
             application/json:
               schema:
@@ -858,6 +880,13 @@ components:
       schema:
         type: string
         format: uuid
+    IncludeArchived:
+      name: include_archived
+      in: query
+      description: Include archived DICOM studies in `studies[]`
+      schema:
+        type: boolean
+        default: false
     Limit:
       name: limit
       in: query
@@ -941,8 +970,10 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Study date/time in ISO 8601 format
-          example: "2026-06-01T10:30:00"
+          description: |
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
+            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+          example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
           nullable: true
@@ -1116,8 +1147,9 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are included with `is_archived`.
-            Studies DCM4CHEE cannot return are left out.
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
@@ -1209,8 +1241,9 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are included with `is_archived`.
-            Studies DCM4CHEE cannot return are left out.
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
@@ -1306,8 +1339,10 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Study date/time in ISO 8601 format, from DCM4CHEE
-          example: "2026-06-01T10:30:00"
+          description: |
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
+            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+          example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
           nullable: true
