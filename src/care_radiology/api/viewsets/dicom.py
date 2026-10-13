@@ -234,8 +234,6 @@ class DicomViewSet(ViewSet):
 
         patient = get_object_or_404(Patient, external_id=patient_id)
 
-        # The modality only knows the accession number it got from the worklist, so the
-        # service request is found by it. Without a match the study is uploaded unlinked.
         try:
             accession_number = read_accession_number(dcm_file)
         except DicomParseError as e:

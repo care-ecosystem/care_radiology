@@ -6,7 +6,7 @@ info:
 
     This plugin enables radiology workflows within CARE:
     - Upload DICOM files and link them to CARE service requests
-    - Read imaging studies with their core service request, encounter, activity definition and diagnostic reports
+    - Read imaging studies with their encounter and core service request
     - Serve a DICOM modality worklist and receive MPPS status webhooks from the
       DICOM modality worklist server
     - Manage per-facility observation templates used to structure diagnostic report
@@ -42,7 +42,7 @@ tags:
   - name: Observation Templates
     description: Manage per-facility reusable observation templates used to structure diagnostic report observations
   - name: Imaging Study
-    description: Read imaging studies (status, accession number) with their core service request, encounter, activity definition and diagnostic reports, and update their status
+    description: Read imaging studies (status, accession number) with their encounter and core service request, and update their status
 
 security:
   - BearerAuth: []
@@ -260,8 +260,7 @@ paths:
         When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
         must match `ImagingStudy.accession_number` of the service request.
 
-        Requires `can_write_patient_obj` permission on the patient and
-        `can_write_radiology_data` permission on the given facility.
+        Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: dicomUpload
       requestBody:
         required: true
@@ -271,7 +270,6 @@ paths:
               type: object
               required:
                 - patient_id
-                - facility_id
                 - service_request_id
                 - file
               properties:
@@ -279,10 +277,6 @@ paths:
                   type: string
                   format: uuid
                   description: Patient external_id
-                facility_id:
-                  type: string
-                  format: uuid
-                  description: Facility external_id — used to authorize this upload against radiology data permissions
                 service_request_id:
                   type: string
                   format: uuid
@@ -328,7 +322,6 @@ paths:
                       - type: "validation_error"
                         msg:
                           file: ["This value is required"]
-                          facility_id: ["This value is required"]
                           patient_id: ["This value is required"]
                           service_request_id: ["This value is required"]
                 bad_extension:
@@ -536,7 +529,9 @@ paths:
       summary: List imaging studies for an encounter
       description: |
         Returns the `ImagingStudy` rows of an encounter, newest first, filtered on
-        `ImagingStudy.encounter`. Each has the same body as the retrieve.
+        `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each has
+        the encounter and service request from core base specs only; use the retrieve for the
+        full service request.
         To fetch a single one by service request, use
         `GET /imaging_study/{serviceRequestId}/`.
 
@@ -592,9 +587,8 @@ paths:
       summary: Get an imaging study
       description: |
         Returns the `ImagingStudy` (status and accession number) linked to a CARE
-        `ServiceRequest`, with its core `service_request`, `encounter`, `activity_definition` and
-        `diagnostic_reports`, looked up by the service request's own `external_id` — not the
-        `ImagingStudy`'s own `id`.
+        `ServiceRequest`, with its `encounter` and core `service_request`, looked up by the
+        service request's own `external_id` — not the `ImagingStudy`'s own `id`.
 
         Requires `can_read_service_request` permission on the service request, plus
         `can_read_radiology_data` permission on its facility.
@@ -619,7 +613,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, or it has no linked ImagingStudy
+          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -679,7 +673,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, or it has no linked ImagingStudy
+          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -1112,16 +1106,15 @@ components:
               type: string
 
     # ===================== Imaging Study =====================
-    ImagingStudy:
+    ImagingStudyListItem:
       type: object
       description: |
-        Radiology-specific metadata linked 1:1 to a CARE ServiceRequest. Every nested object is
-        serialized with a core base spec (columns only, no extra queries).
+        List body of an ImagingStudy. Every nested object uses a core base spec (columns only),
+        so a page costs no queries per row.
       required:
         - id
         - status
         - encounter
-        - diagnostic_reports
       properties:
         id:
           type: string
@@ -1133,27 +1126,14 @@ components:
         accession_number:
           type: string
           nullable: true
-          description: |
-            Accession number generated for this service request. This is its only copy.
-            Null until the accession task has run for the request.
           example: "ACJAYCTO26000004"
+        encounter:
+          $ref: '#/components/schemas/ImagingStudyEncounter'
         service_request:
           allOf:
             - $ref: '#/components/schemas/ImagingStudyServiceRequest'
           nullable: true
           description: Null when the ImagingStudy has no linked ServiceRequest
-        encounter:
-          $ref: '#/components/schemas/ImagingStudyEncounter'
-        activity_definition:
-          allOf:
-            - $ref: '#/components/schemas/ImagingStudyActivityDefinition'
-          nullable: true
-          description: The service request's ActivityDefinition; null when it has none
-        diagnostic_reports:
-          type: array
-          description: The service request's DiagnosticReports (soft-deleted ones excluded)
-          items:
-            $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
 
     ImagingStudyServiceRequest:
       type: object
@@ -1202,6 +1182,84 @@ components:
           type: string
           nullable: true
 
+    ImagingStudy:
+      type: object
+      description: |
+        Retrieve (and PATCH) body of an ImagingStudy, linked 1:1 to a CARE ServiceRequest.
+        Same as `ImagingStudyListItem`, except `service_request` is the full core retrieve body.
+      required:
+        - id
+        - status
+        - encounter
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ImagingStudy external_id
+        status:
+          type: string
+          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+        accession_number:
+          type: string
+          nullable: true
+          description: |
+            Accession number generated for this service request. This is its only copy.
+            Null until the accession task has run for the request.
+          example: "ACJAYCTO26000004"
+        encounter:
+          $ref: '#/components/schemas/ImagingStudyEncounter'
+        service_request:
+          allOf:
+            - $ref: '#/components/schemas/ImagingStudyServiceRequestDetail'
+          nullable: true
+          description: Null when the ImagingStudy has no linked ServiceRequest
+
+    ImagingStudyServiceRequestDetail:
+      description: |
+        Core CARE ServiceRequest, serialized with core `ServiceRequestRetrieveSpec` — the same
+        body as core `GET /api/v1/facility/{facility}/service_request/{id}/`, but without
+        `encounter` (it is at the root of `ImagingStudy`), `specimens` and `tags`.
+      allOf:
+        - $ref: '#/components/schemas/ImagingStudyServiceRequest'
+        - type: object
+          properties:
+            created_date:
+              type: string
+              format: date-time
+            modified_date:
+              type: string
+              format: date-time
+            requester:
+              type: object
+              nullable: true
+              description: Requesting user (core `UserSpec`)
+            locations:
+              type: array
+              description: Facility locations (core `FacilityLocationListSpec`)
+              items:
+                type: object
+            healthcare_service:
+              type: object
+              nullable: true
+              description: Core `HealthcareServiceReadSpec`
+            activity_definition:
+              type: object
+              nullable: true
+              description: Core `ActivityDefinitionReadSpec`
+            diagnostic_reports:
+              type: array
+              description: Core `DiagnosticReportListSpec`, one per report
+              items:
+                type: object
+            created_by:
+              type: object
+              nullable: true
+              description: Core `UserSpec`
+            updated_by:
+              type: object
+              nullable: true
+              description: Core `UserSpec`
+
     ImagingStudyEncounter:
       type: object
       description: Core CARE Encounter, serialized with core `EncounterSpecBase`
@@ -1232,77 +1290,6 @@ components:
           type: string
           nullable: true
 
-    ImagingStudyActivityDefinition:
-      type: object
-      description: Core CARE ActivityDefinition, serialized with core `BaseActivityDefinitionSpec`
-      required:
-        - id
-        - title
-        - status
-        - classification
-        - kind
-        - code
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: ActivityDefinition external_id
-        title:
-          type: string
-        derived_from_uri:
-          type: string
-          nullable: true
-        status:
-          type: string
-        description:
-          type: string
-        usage:
-          type: string
-        classification:
-          type: string
-        kind:
-          type: string
-        code:
-          type: object
-          description: Coding (system, code, display)
-        body_site:
-          type: object
-          nullable: true
-          description: Coding (system, code, display)
-        diagnostic_report_codes:
-          type: array
-          items:
-            type: object
-            description: Coding (system, code, display)
-
-    ImagingStudyDiagnosticReport:
-      type: object
-      description: Core CARE DiagnosticReport, serialized with core `DiagnosticReportSpecBase`
-      required:
-        - id
-        - status
-        - category
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: DiagnosticReport external_id
-        status:
-          type: string
-        category:
-          type: object
-          description: Coding (system, code, display)
-        code:
-          type: object
-          nullable: true
-          description: Coding (system, code, display)
-        note:
-          type: string
-          nullable: true
-        conclusion:
-          type: string
-          nullable: true
-
     ImagingStudyStatusUpdate:
       type: object
       required:
@@ -1320,7 +1307,7 @@ components:
             results:
               type: array
               items:
-                $ref: '#/components/schemas/ImagingStudy'
+                $ref: '#/components/schemas/ImagingStudyListItem'
 
     # ===================== Webhooks =====================
     WebhookStatusPayload:

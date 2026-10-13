@@ -40,62 +40,6 @@ class DICOM_TAG(Enum):
     ReferencedSOPSQ = "00081199"
 
 
-def fetch_study(dicom_study_uid):
-    def first(dcm, tag):
-        values = d_find(dcm, tag)
-        return values[0] if values else None
-
-    study_uid = dicom_study_uid
-
-    study = d_query_study(study_uid)
-
-    if study is None:
-        return None
-
-    # Query series list, handle timeout/failure gracefully
-    series_data = d_query_series_for_study(study_uid)
-    if series_data is None:
-        return None
-
-    series = [
-        {
-            "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
-            "series_number": d_find(s, DICOM_TAG.SeriesNumber.value),
-            "series_instance_count": d_find(s, DICOM_TAG.NumberOfSeriesRelatedInstances.value),
-            "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
-            "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
-        }
-        for s in series_data
-    ]
-
-    study_description = (
-        d_find(study, DICOM_TAG.StudyDescription.value)[0]
-        if len(d_find(study, DICOM_TAG.StudyDescription.value)) > 0
-        else None
-    )
-
-    study_date_raw = first(study, DICOM_TAG.StudyDate.value)
-    study_time_raw = first(study, DICOM_TAG.StudyTime.value)
-
-    if study_date_raw and study_time_raw:
-        study_date = d_datetime_to_iso(study_date_raw, study_time_raw)
-    elif study_date_raw:
-        study_date = d_datetime_to_iso(study_date_raw)
-    else:
-        study_date = None
-
-    cachable = {
-        "study_uid": study_uid,
-        "study_date": study_date,
-        "study_description": study_description,
-        "study_modalities": d_find(study, DICOM_TAG.StudyModalities.value),
-        "study_accession": d_find(study, DICOM_TAG.AccessionNumber.value),
-        "study_series": series,
-    }
-
-    return cachable
-
-
 def _query_pacs(url, log_ctx, params=None):
     """GET a PACS endpoint and return parsed JSON, or None (logged) on timeout/failure."""
     try:

@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from care_radiology.api.specs.imaging_study import (
     ImagingStudyReadSpec,
+    ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
 )
 from care_radiology.models.imaging_study import ImagingStudy
@@ -16,7 +17,7 @@ from care_radiology.models.imaging_study import ImagingStudy
 class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet):
     database_model = ImagingStudy
     pydantic_read_model = ImagingStudyReadSpec
-    pydantic_retrieve_model = ImagingStudyReadSpec
+    pydantic_retrieve_model = ImagingStudyRetrieveSpec
     pydantic_update_model = ImagingStudyUpdateSpec
     lookup_field = "service_request__external_id"
 
@@ -38,11 +39,14 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
             super()
             .get_queryset()
             .filter(service_request__deleted=False)
-            .select_related("encounter", "service_request__facility", "service_request__activity_definition")
-            .prefetch_related("service_request__diagnosticreport_set")
+            .select_related("encounter", "service_request__facility")
         )
         if self.action != "list":
-            return queryset
+            return queryset.select_related(
+                "service_request__encounter__patient",
+                "service_request__activity_definition",
+                "service_request__healthcare_service",
+            )
 
         encounter_id = self.request.GET.get("encounter")
         if not encounter_id:
