@@ -24,13 +24,13 @@ servers:
 
 tags:
   - name: DICOM Studies
-    description: Upload DICOM files, serve the modality worklist, and archive studies
+    description: Serve the modality worklist, validate JWTs for DICOMweb access, and accept external (static API key) DICOM uploads
   - name: Webhooks
     description: Receive MPPS (Modality Performed Procedure Step) status notifications from the modality worklist server
   - name: Observation Result Templates
     description: Manage per-facility reusable observation result templates used to structure diagnostic report observations
   - name: Imaging Study
-    description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, and update their status
+    description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, update their status, upload DICOM files against a service request, and archive DICOM studies
 
 security:
   - BearerAuth: []
@@ -136,12 +136,12 @@ paths:
         server, HIS integration). The file is forwarded to DCM4CHEE and a `DicomStudy`
         record is created or updated in CARE.
 
-        The study is then linked to its service request the same way `upload` does: the
+        The study is then linked to its service request the same way the imaging study `upload` does: the
         `ImagingStudy` is found by the file's Accession Number (0008,0050), among this
         patient's non-deleted service requests. A file with no readable accession number, or
         one no `ImagingStudy` of this patient has, is uploaded unlinked: the request still
         succeeds with `201` and `service_request_id` is absent from the response. An unlinked
-        study cannot be archived through the API (see the archive endpoint), so callers should
+        study cannot be archived through the API (see the imaging study archive endpoint), so callers should
         check for the absence of `service_request_id`.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
@@ -240,8 +240,6 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
-  
-
   # ---------- Webhooks ----------
   /api/care_radiology/webhooks/status/:
     post:
@@ -334,18 +332,20 @@ paths:
 
   # ---------- Imaging Study ----------
   /api/care_radiology/patient/{patient_id}/imaging_study/:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
     get:
       tags:
         - Imaging Study
       summary: List imaging studies for an encounter
       description: |
-        Returns the `ImagingStudy` rows of an encounter, newest first, filtered on
-        `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each has
-        the encounter and service request from core base specs only; use the retrieve for the
-        full service request. Archived DICOM studies are always left out of `studies[]` here;
-        `include_archived` is only supported on the retrieve.
+        Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
+        on `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each
+        has the encounter and service request from core base specs only; use the retrieve for
+        the full service request. Archived DICOM studies are always left out of `studies[]`
+        here; `include_archived` is only supported on the retrieve.
         To fetch a single one by service request, use
-        `GET /imaging_study/{serviceRequestId}/`.
+        `GET /patient/{patient_id}/imaging_study/{service_request_id}/`.
 
         Requires `can_view_service_request_for_encounter` permission on the encounter, plus
         `can_read_radiology_data` permission on its facility.
@@ -355,13 +355,6 @@ paths:
           in: query
           required: true
           description: Encounter external_id (UUID)
-          schema:
-            type: string
-            format: uuid
-        - name: patient_id
-          in: path
-          required: true
-          description: patient external_id (UUID)
           schema:
             type: string
             format: uuid
@@ -391,7 +384,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: '`encounter` is not a valid UUID, or no encounter has it'
+          description: '`patient_id` or `encounter` is not a valid UUID, or no such patient or encounter exists'
           content:
             application/json:
               schema:
@@ -401,35 +394,24 @@ paths:
                   - type: "object_not_found"
                     msg: "No Encounter matches the given query."
 
-  /api/care_radiology/patient/{patient_id}/imaging_study/{serviceRequestId}/:
+  /api/care_radiology/patient/{patient_id}/imaging_study/{service_request_id}/:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
+      - $ref: '#/components/parameters/ServiceRequestId'
     get:
       tags:
         - Imaging Study
       summary: Get an imaging study
       description: |
         Returns the `ImagingStudy` (status and accession number) linked to a CARE
-        `ServiceRequest`, with its `encounter`, core `service_request` and linked DICOM
-        `studies`, looked up by the service request's own `external_id` — not the
+        `ServiceRequest` of the patient, with its `encounter`, core `service_request` and
+        linked DICOM `studies`, looked up by the service request's own `external_id` — not the
         `ImagingStudy`'s own `id`.
 
         Requires `can_read_service_request` permission on the service request, plus
         `can_read_radiology_data` permission on its facility.
       operationId: getImagingStudy
       parameters:
-        - name: serviceRequestId
-          in: path
-          required: true
-          description: ServiceRequest external_id (UUID)
-          schema:
-            type: string
-            format: uuid
-        - name: patient_id
-          in: path
-          required: true
-          description: patient external_id (UUID)
-          schema:
-            type: string
-            format: uuid
         - $ref: '#/components/parameters/IncludeArchived'
       responses:
         '200':
@@ -454,7 +436,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
+          description: No such patient, no service request with this external_id for the patient, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -469,7 +451,7 @@ paths:
         - Imaging Study
       summary: Update an imaging study's status
       description: |
-        Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest`,
+        Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest` of the patient,
         looked up by the service request's own `external_id`, like the retrieve. Any status can
         be set from any status. Returns the same body shape as the retrieve; archived DICOM
         studies are left out of `studies[]` because this operation does not accept
@@ -477,14 +459,6 @@ paths:
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: updateImagingStudyStatus
-      parameters:
-        - name: serviceRequestId
-          in: path
-          required: true
-          description: ServiceRequest external_id (UUID)
-          schema:
-            type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -516,7 +490,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
+          description: No such patient, no service request with this external_id for the patient, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -526,12 +500,13 @@ paths:
                   - type: "object_not_found"
                     msg: "No ImagingStudy matches the given query."
 
-
   /api/care_radiology/patient/{patient_id}/imaging_study/upload/:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
     post:
       tags:
         - Imaging Study
-      summary: Upload DICOM file in Imaging Study
+      summary: Upload DICOM file for an imaging study
       description: |
         Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
         the study UID is extracted from the response, and a `DicomStudy` record is
@@ -544,14 +519,6 @@ paths:
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: dicomUpload
-      parameters:
-      - name: patient_id
-        in: path
-        required: true
-        description: patient external_id (UUID)
-        schema:
-          type: string
-          format: uuid
       requestBody:
         required: true
         content:
@@ -560,12 +527,13 @@ paths:
               type: object
               required:
                 - encounter_id
+                - service_request_id
                 - file
               properties:
                 encounter_id:
                   type: string
                   format: uuid
-                  description: encounter external_id
+                  description: Encounter external_id the service request belongs to. Must belong to the patient.
                 service_request_id:
                   type: string
                   format: uuid
@@ -597,8 +565,8 @@ paths:
                     description: ServiceRequest external_id the study was linked to
         '400':
           description: |
-            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
-            request does not belong to the patient. When
+            A required field is missing, the file is not a `.dcm` / `.dicom`, or the encounter
+            or service request does not belong to the patient. When
             `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
             file's accession number is unreadable, missing, or does not match
             `ImagingStudy.accession_number`.
@@ -613,7 +581,7 @@ paths:
                       - type: "validation_error"
                         msg:
                           file: ["This value is required"]
-                          patient_id: ["This value is required"]
+                          encounter_id: ["This value is required"]
                           service_request_id: ["This value is required"]
                 bad_extension:
                   value:
@@ -662,16 +630,20 @@ paths:
           $ref: '#/components/responses/InternalServerError'
 
   /api/care_radiology/patient/{patient_id}/imaging_study/{study_id}/archive/:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
+      - $ref: '#/components/parameters/StudyId'
     post:
       tags:
         - Imaging Study
-      summary: Archive a DICOM study in Imaging Study
+      summary: Archive a DICOM study of an imaging study
       description: |
         Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
         `archived_datetime`, and `archived_by`. The row is never deleted.
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
-        The study must already be linked to a service request (via `upload`, or via
+        `study_id` is the `id` of an entry in an imaging study's `studies[]`. The study must
+        already be linked to a service request (via the imaging study `upload`, or via
         `upload_dicom_external` when its accession number matched) — archiving is rejected
         otherwise, since authorization is resolved through
         `imaging_study.service_request.facility`. A study that `upload_dicom_external`
@@ -681,22 +653,6 @@ paths:
         There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
         archive actions.
       operationId: archiveDicomStudy
-      parameters:
-        
-        - name: study_id
-          in: path
-          required: true
-          description: dicom study external_id (UUID)
-          schema:
-            type: string
-            format: uuid
-        - name: patient_id
-          in: path
-          required: true
-          description: patient external_id (UUID)
-          schema:
-            type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -738,7 +694,16 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'  
+          description: No such patient, or no DicomStudy with this external_id for the patient
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No DicomStudy matches the given query."
+
   # ---------- Observation Result Templates ----------
   /api/care_radiology/observation_result_template/:
     get:
@@ -910,6 +875,30 @@ components:
       description: Static API key (CARE_RADIOLOGY_WEBHOOK_SECRET setting value)
 
   parameters:
+    PatientId:
+      name: patient_id
+      in: path
+      required: true
+      description: Patient external_id (UUID)
+      schema:
+        type: string
+        format: uuid
+    ServiceRequestId:
+      name: service_request_id
+      in: path
+      required: true
+      description: ServiceRequest external_id (UUID)
+      schema:
+        type: string
+        format: uuid
+    StudyId:
+      name: study_id
+      in: path
+      required: true
+      description: DicomStudy external_id (UUID); the `id` of an entry in an imaging study's `studies[]`
+      schema:
+        type: string
+        format: uuid
     Id:
       name: id
       in: path
