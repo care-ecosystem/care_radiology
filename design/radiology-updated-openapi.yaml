@@ -23,14 +23,14 @@ servers:
     description: Dev server
 
 tags:
-  - name: DICOM Studies
-    description: Serve the modality worklist, validate JWTs for DICOMweb access, and accept external (static API key) DICOM uploads
-  - name: Webhooks
-    description: Receive MPPS (Modality Performed Procedure Step) status notifications from the modality worklist server
+  - name: External APIs
+    description: Serve the modality worklist, validate JWTs for DICOMweb access, and accept external (static API key) DICOM uploads, Receive MPPS (Modality Performed Procedure Step) status notifications from the modality worklist server
   - name: Observation Result Templates
     description: Manage per-facility reusable observation result templates used to structure diagnostic report observations
   - name: Imaging Study
     description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, update their status, upload DICOM files against a service request, and archive DICOM studies
+  - name: Dicom Studies
+    description: Read imaging studies (status, accession number) with their encounter, to authenticate user
 
 security:
   - BearerAuth: []
@@ -52,10 +52,10 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  /api/care_radiology/dicom/worklist/:
+  /api/care_radiology/facility/{facility_id}/external/worklist/:
     get:
       tags:
-        - DICOM Studies
+        - External APIs
       summary: Get modality worklist
       description: |
         Returns active service requests formatted for a DICOM modality worklist.
@@ -67,9 +67,11 @@ paths:
         `activity_definition.locations` (narrowed to `modality` when given). Devices are
         fetched in one query for the whole worklist.
       operationId: dicomWorklist
+
       security:
         - StaticApiKey: []
       parameters:
+        - $ref: '#/components/parameters/FacilityId'
         - name: modality
           in: query
           description: Filter by modality device registered_name (case-insensitive)
@@ -88,15 +90,6 @@ paths:
           schema:
             type: string
             example: "2026-06-12"
-        - name: facility
-          in: query
-          description: |
-            Facility external_id (UUID). Optional — when given, results are narrowed to
-            service requests belonging to that facility. When omitted, active service
-            requests across all facilities are returned.
-          schema:
-            type: string
-            format: uuid
       responses:
         '200':
           description: Worklist results
@@ -125,10 +118,10 @@ paths:
                   - type: "object_not_found"
                     msg: "No Facility matches the given query."
 
-  /api/care_radiology/dicom/upload_dicom_external/:
+  /api/care_radiology/facility/{facility_id}/external/imaging_study/upload/:
     post:
       tags:
-        - DICOM Studies
+        - External APIs
       summary: Upload DICOM file (external / static API key)
       description: |
         Upload a DICOM file for a patient using a static API key instead of user JWT auth.
@@ -147,6 +140,8 @@ paths:
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
       operationId: dicomUploadExternal
+      parameters:
+      - $ref: '#/components/parameters/FacilityId'
       security:
         - StaticApiKey: []
       requestBody:
@@ -241,10 +236,10 @@ paths:
           $ref: '#/components/responses/InternalServerError'
 
   # ---------- Webhooks ----------
-  /api/care_radiology/webhooks/status/:
-    post:
+  /api/care_radiology/facility/{facility_id}/external/imaging_study/status/:
+    patch:
       tags:
-        - Webhooks
+        - External APIs
       summary: Receive MPPS status update
       description: |
         Webhook endpoint called by the DICOM worklist server with Modality Performed
@@ -258,6 +253,8 @@ paths:
         warning) and must match a `TagConfig.display` value configured for the
         service request's facility.
       operationId: webhookStatus
+      parameters:
+      - $ref: '#/components/parameters/FacilityId'
       security:
         - StaticApiKey: []
       requestBody:
@@ -880,6 +877,14 @@ components:
       in: path
       required: true
       description: Patient external_id (UUID)
+      schema:
+        type: string
+        format: uuid
+    FacilityId:
+      name: facility_id
+      in: path
+      required: true
+      description: Facility external_id (UUID)
       schema:
         type: string
         format: uuid
