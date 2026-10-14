@@ -481,9 +481,8 @@ paths:
       description: |
         Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest` of the patient,
         looked up by the service request's own `external_id`, like the retrieve. Any status can
-        be set from any status. Returns the same body shape as the retrieve; archived DICOM
-        studies are left out of `studies[]` because this operation does not accept
-        `include_archived`.
+        be set from any status. Returns the same body as the retrieve with its default, so
+        `studies[]` includes archived studies.
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: updateImagingStudyStatus
@@ -949,10 +948,12 @@ components:
     IncludeArchived:
       name: include_archived
       in: query
-      description: Include archived DICOM studies in `studies[]` (supported on the retrieve only)
+      description: |
+        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `true`, so the
+        retrieve returns all studies; `false` leaves the archived ones out.
       schema:
         type: boolean
-        default: false
+        default: true
     Limit:
       name: limit
       in: query
@@ -1214,7 +1215,7 @@ components:
             response. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
-            $ref: '#/components/schemas/ImagingStudyDicomStudy'
+            $ref: '#/components/schemas/ImagingStudyListDicomStudy'
 
     ImagingStudyServiceRequest:
       type: object
@@ -1266,7 +1267,8 @@ components:
           type: array
           description: |
             The service request's newest DiagnosticReport, returned as a list of at most one
-            item. The list is empty when the service request has no DiagnosticReport.
+            item. The list is empty when the service request has no DiagnosticReport. The
+            retrieve returns all reports instead (see `ImagingStudyServiceRequestDetail`).
           items:
             $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
 
@@ -1308,9 +1310,9 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are left out unless
-            `include_archived=true` is passed to the retrieve; the PATCH response always leaves
-            them out. A study DCM4CHEE cannot return, or whose details fail to
+            DCM4CHEE (cached for an hour). Archived studies are included unless
+            `include_archived=false` is passed to the retrieve; the PATCH response always includes
+            them. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -1347,6 +1349,14 @@ components:
               type: object
               nullable: true
               description: Core `ActivityDefinitionReadSpec`
+            diagnostic_reports:
+              type: array
+              description: |
+                All of the service request's DiagnosticReports (deleted ones left out), from core
+                `ServiceRequestRetrieveSpec`. Empty when it has none.
+              items:
+                type: object
+                description: Core `DiagnosticReportListSpec` (the `ImagingStudyDiagnosticReport` fields plus `created_date`, `modified_date` and `service_request`)
             created_by:
               type: object
               nullable: true
@@ -1386,9 +1396,62 @@ components:
           type: string
           nullable: true
 
+    ImagingStudyListDicomStudy:
+      type: object
+      description: |
+        A DICOM study as returned inside an ImagingStudy list item (`DicomStudyReadSpec`). The list
+        never includes archived studies, so it carries no archive fields.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: DicomStudy external_id
+        study_uid:
+          type: string
+          description: DICOM Study Instance UID
+          example: "1.2.840.10008.5.1.4.1.1.2.1234567890"
+        study_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
+            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+          example: "2026-06-01T10:30:00+05:30"
+        study_description:
+          type: string
+          nullable: true
+          example: "CHEST PA"
+        study_modalities:
+          type: array
+          items:
+            type: string
+          example: ["CT"]
+        number_of_series:
+          type: number
+          example: 2
+        number_of_instances:
+          type: number
+          example: 1
+        study_series:
+          type: array
+          items:
+            $ref: '#/components/schemas/DicomSeries'
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+
     ImagingStudyDicomStudy:
       type: object
-      description: A DICOM study as returned inside an ImagingStudy (`DicomStudyReadSpec`)
+      description: |
+        A DICOM study as returned inside the ImagingStudy retrieve and PATCH bodies
+        (`DicomStudyRetrieveSpec`): the list item plus the archive fields, since the retrieve can
+        include archived studies.
       properties:
         id:
           type: string
