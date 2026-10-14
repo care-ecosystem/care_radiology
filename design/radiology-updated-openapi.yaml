@@ -1372,6 +1372,12 @@ components:
           items:
             type: string
           example: ["CT"]
+        number_of_series:
+          type: number
+          example: 2
+        number_of_instances:
+          type: number
+          example: 1
         study_series:
           type: array
           items:
