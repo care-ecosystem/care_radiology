@@ -4,7 +4,7 @@ from care.emr.models.service_request import ServiceRequest
 from celery import shared_task
 from django.db import transaction
 
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest, RadiologyServiceRequestStatus
+from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.services.dicom_service import archive_study
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 @transaction.atomic
-def deactivate_radiology_service_request(service_request_id: str):
+def deactivate_imaging_study(service_request_id: str):
     try:
         service_request = ServiceRequest.objects.get(id=service_request_id)
     except ServiceRequest.DoesNotExist:
@@ -20,13 +20,13 @@ def deactivate_radiology_service_request(service_request_id: str):
         return
 
     try:
-        rsr = service_request.radiology_service_requests
-    except RadiologyServiceRequest.DoesNotExist:
+        imaging_study = service_request.imaging_study
+    except ImagingStudy.DoesNotExist:
         return
 
-    if rsr.status != RadiologyServiceRequestStatus.CANCELLED:
-        rsr.status = RadiologyServiceRequestStatus.CANCELLED
-        rsr.save(update_fields=["status"])
+    if imaging_study.status != ImagingStudyStatus.CANCELLED:
+        imaging_study.status = ImagingStudyStatus.CANCELLED
+        imaging_study.save(update_fields=["status", "modified_date"])
 
-    for study in rsr.studies.filter(is_archived=False):
+    for study in imaging_study.studies.filter(is_archived=False):
         archive_study(study, archive_reason=f"Service request status: {service_request.status}")
