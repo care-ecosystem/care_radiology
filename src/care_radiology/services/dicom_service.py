@@ -5,17 +5,17 @@ from urllib.parse import quote
 import requests
 from django.core.cache import cache
 from django.db import connection, transaction
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from care.emr.models.encounter import Encounter
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
-    DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE,
-    DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
     DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
     MPPS_STATUS_DISCONTINUED,
@@ -186,6 +186,7 @@ def upload_dicom_file(patient, dcm_file, user=None):
                     status_code=500,
                     extra={"study_uid": study_uid},
                 )
+            save_study_counts(dicom_study, study_details)
 
         return {
             "study_uid": study_uid,
@@ -203,32 +204,57 @@ def upload_dicom_file(patient, dcm_file, user=None):
             cache.delete(lock_key)
 
 
-def link_service_request_to_study(service_request, study_uid, raw_data=None, user=None):
-    if service_request.encounter_id is None:
-        raise WebhookConflictError("Service request has no encounter")
+def save_study_counts(dicom_study, study_details):
+    """
+    Saves the study's series and instance counts from its PACS details, only ever raising them,
+    so a parallel upload that fetched the study earlier cannot lower them. An unreadable count
+    is logged and skipped rather than failing the upload.
+    """
+    series = study_details["study_series"]
+    try:
+        number_of_instances = sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
+    except (TypeError, ValueError):
+        logger.warning("Study %s has an unreadable series instance count, counts not updated", dicom_study.pk)
+        return
 
+    DicomStudy.objects.filter(pk=dicom_study.pk).update(
+        number_of_series=Greatest("number_of_series", len(series)),
+        number_of_instances=Greatest("number_of_instances", number_of_instances),
+    )
+
+
+def _link_study_to_imaging_study(imaging_study, study_uid, patient, user=None):
     with transaction.atomic():
-        imaging_study, _ = ImagingStudy.objects.get_or_create(
-            service_request=service_request, defaults={"encounter_id": service_request.encounter_id}
-        )
-
         # select_for_update() makes a concurrent get_or_create() for the same
         # (patient, study_uid) block on this row (or on the insert) rather than
         # racing past the check below with stale data.
         _lock_study_uid(study_uid)
         study, _ = DicomStudy.objects.select_for_update().get_or_create(
             dicom_study_uid=study_uid,
-            patient=service_request.patient,
+            patient=patient,
             is_archived=False,
             defaults={"created_by": user, "updated_by": user},
         )
-        if study.imaging_study_id is not None and study.imaging_study_id != imaging_study.id:
+        # The same Study UID can be recorded against more than one patient, so every
+        # non-archived record of it is checked, not only this patient's.
+        linked_elsewhere = (
+            DicomStudy.objects.filter(dicom_study_uid=study_uid, is_archived=False, imaging_study__isnull=False)
+            .exclude(imaging_study=imaging_study)
+            .select_related("imaging_study__service_request")
+            .first()
+        )
+        if linked_elsewhere is not None:
             if plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
-                raise WebhookConflictError("Study is already linked to a different service request")
+                other = linked_elsewhere.imaging_study.service_request
+                if other is None:
+                    raise WebhookConflictError("Study is already linked to a different imaging study")
+                raise WebhookConflictError(
+                    f"Study is already linked to a different service request: {other.external_id}"
+                )
             logger.warning(
-                "DICOM study validation is disabled on this instance, relinking study %s to service request %s",
+                "DICOM study validation is disabled on this instance, relinking study %s to imaging study %s",
                 study_uid,
-                service_request.external_id,
+                imaging_study.external_id,
             )
 
         if study.imaging_study_id != imaging_study.id:
@@ -245,42 +271,31 @@ def link_service_request_to_study(service_request, study_uid, raw_data=None, use
 
     return {
         "external_id": imaging_study.external_id,
-        "data": raw_data or {},
         "status": imaging_study.status,
     }
 
 
-def ensure_study_linked_to_service_request(service_request, study_uid, user=None):
-    """
-    Links a newly uploaded study to its service request if not already linked, returning True 
-    if linked and False if no action was needed. Raises WebhookConflictError for conflicts 
-    (unless validation is disabled), with results cached per study/request pair.
-    """
-    cache_key = DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study_uid, service_request.external_id)
-    if cache.get(cache_key):
-        return False
+def link_study_to_service_request(service_request, study_uid, user=None):
+    if service_request.encounter_id is None:
+        raise WebhookConflictError("Service request has no encounter")
 
-    linked_service_requests = set(
-        DicomStudy.objects.filter(
-            dicom_study_uid=study_uid,
-            imaging_study__isnull=False,
-            is_archived=False,
-            deleted=False,
-        ).values_list("imaging_study__service_request__external_id", flat=True)
-    )
+    with transaction.atomic():
+        imaging_study, _ = ImagingStudy.objects.get_or_create(
+            service_request=service_request, defaults={"encounter_id": service_request.encounter_id}
+        )
+        return _link_study_to_imaging_study(imaging_study, study_uid, service_request.patient, user=user)
 
-    if service_request.external_id in linked_service_requests:
-        newly_linked = False
-    elif linked_service_requests and plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
-        # Left uncached: an operator undoing the other link has to take effect at once.
-        other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
-        raise WebhookConflictError(f"Study is already linked to a different service request: {other}")
-    else:
-        link_service_request_to_study(service_request, study_uid, user=user)
-        newly_linked = True
 
-    cache.set(cache_key, True, timeout=DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS)
-    return newly_linked
+def link_study_to_encounter(encounter, study_uid, user=None):
+    """Links a study to the encounter's one imaging study without a service request."""
+    imaging_studies = ImagingStudy.objects.filter(encounter=encounter, service_request__isnull=True)
+    imaging_study = imaging_studies.first()
+    if imaging_study is None:
+        with transaction.atomic():
+            # Serialises the creation of that imaging study per encounter.
+            Encounter.objects.select_for_update().filter(pk=encounter.pk).first()
+            imaging_study = imaging_studies.first() or ImagingStudy.objects.create(encounter=encounter)
+    return _link_study_to_imaging_study(imaging_study, study_uid, encounter.patient, user=user)
 
 
 def process_study_webhook(data):
@@ -309,7 +324,7 @@ def process_study_webhook(data):
         except ServiceRequest.DoesNotExist:
             raise WebhookConflictError("No matching service request")
 
-        return link_service_request_to_study(sr, data["study_id"], raw_data=data)
+        return {**link_study_to_service_request(sr, data["study_id"]), "data": data}
 
     elif data.get("patient_id") and data.get("study_id"):
         from care.emr.models.patient import Patient
@@ -414,7 +429,7 @@ def fetch_study(dicom_study):
     # record's own external_id is added on every return rather than cached.
     cached = cache.get(key)
     if cached:
-        return {**cached, "external_id": dicom_study.external_id}
+        return {**cached, "id": dicom_study.external_id}
 
     study = d_query_study(study_uid)
 
@@ -456,7 +471,7 @@ def fetch_study(dicom_study):
     }
 
     cache.set(key, cachable, timeout=60 * 60)
-    return {**cachable, "external_id": dicom_study.external_id}
+    return {**cachable, "id": dicom_study.external_id}
 
 
 def fetch_studies(dicom_studies):
@@ -587,10 +602,4 @@ def archive_study(study, archive_reason, archived_by=None):
             update_fields.append("updated_by")
         study.save(update_fields=update_fields)
 
-    # A re-upload of this study has to link its new record, not reuse the cached link.
-    imaging_study = study.imaging_study
-    if imaging_study is not None and imaging_study.service_request_id is not None:
-        cache.delete(
-            DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study.dicom_study_uid, imaging_study.service_request.external_id)
-        )
     return study
