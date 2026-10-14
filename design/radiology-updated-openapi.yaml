@@ -596,7 +596,8 @@ paths:
             or service request does not belong to the patient. When
             `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
             file's accession number is unreadable, missing, or does not match
-            `ImagingStudy.accession_number`.
+            `ImagingStudy.accession_number`, or the service request has no `ImagingStudy`
+            (`imaging_study_missing`).
           content:
             application/json:
               schema:

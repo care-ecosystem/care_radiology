@@ -27,6 +27,7 @@ from care_radiology.api.specs.dicom import (
 )
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
+from care_radiology.models.imaging_study import ImagingStudy
 from care_radiology.security.authentication import (
     StaticAPIKeyAuthentication,
     StaticAPIKeyAuthorization,
@@ -133,7 +134,22 @@ class DicomViewSet(ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if file_accession_number != service_request.imaging_study.accession_number:
+        try:
+            imaging_study = service_request.imaging_study
+        except ImagingStudy.DoesNotExist:
+            return Response(
+                data={
+                    "errors": [
+                        {
+                            "type": "imaging_study_missing",
+                            "msg": "Service request has no imaging study to match the accession number against",
+                        }
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if file_accession_number != imaging_study.accession_number:
             return Response(
                 data={
                     "errors": [
