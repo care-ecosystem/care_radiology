@@ -1,9 +1,9 @@
 import datetime
 
-from care.emr.resources.base import EMRResource
-from care.users.models import User
-from pydantic import UUID4, BaseModel, Field, model_validator
+from pydantic import UUID4, BaseModel, Field
 
+from care.emr.resources.base import EMRResource, cacheable, model_from_cache
+from care.users.models import User
 from care_radiology.models.dicom_study import DicomStudy
 
 
@@ -12,22 +12,11 @@ class DicomStudyLinkSpec(BaseModel):
     study_uid: str = Field(min_length=1)
 
 
-class DicomStudiesQuerySpec(BaseModel):
-    encounter_id: UUID4 | None = Field(None, alias="encounterId")
-    service_request_id: UUID4 | None = Field(None, alias="serviceRequestId")
-    include_archived: bool = Field(False, alias="includeArchived")
-
-    @model_validator(mode="after")
-    def require_one_scope(self):
-        if not self.encounter_id and not self.service_request_id:
-            raise ValueError("Either encounterId or serviceRequestId is required")
-        return self
-
-
 class DicomStudyArchiveSpec(BaseModel):
     archive_reason: str = Field(min_length=1)
 
 
+@cacheable(use_base_manager=True)
 class DicomStudyUserSpec(EMRResource):
     __model__ = User
 
@@ -43,24 +32,52 @@ class DicomStudyUserSpec(EMRResource):
         mapping["id"] = str(obj.external_id)
 
 
-class DicomStudyArchiveStateSpec(EMRResource):
+class DicomStudyBaseSpec(EMRResource):
     __model__ = DicomStudy
 
     id: UUID4 | None = None
-    dicom_study_uid: str
+    study_uid: str
+    created_by: dict | None = None
+    updated_by: dict | None = None
+
+    @classmethod
+    def perform_extra_serialization(cls, mapping, obj, *args, **kwargs):
+        super().perform_extra_serialization(mapping, obj)
+        mapping["study_uid"] = obj.dicom_study_uid
+        if obj.created_by_id:
+            mapping["created_by"] = model_from_cache(DicomStudyUserSpec, id=obj.created_by_id)
+        if obj.updated_by_id:
+            mapping["updated_by"] = model_from_cache(DicomStudyUserSpec, id=obj.updated_by_id)
+
+
+class DicomStudyReadSpec(DicomStudyBaseSpec):
+    study_date: str | None = None
+    study_description: str | None = None
+    study_modalities: list[str] = []
+    study_series: list[dict] = []
+
+    @classmethod
+    def perform_extra_serialization(cls, mapping, obj, *args, pacs_details, **kwargs):
+        super().perform_extra_serialization(mapping, obj)
+        for field in ("study_date", "study_description", "study_modalities", "study_series"):
+            mapping[field] = pacs_details[field]
+
+
+class DicomStudyArchiveStateSpec(DicomStudyBaseSpec):
     is_archived: bool
     archive_reason: str
     archived_datetime: datetime.datetime | None = None
-    archived_by: DicomStudyUserSpec | None = None
-    created_by: DicomStudyUserSpec | None = None
-    updated_by: DicomStudyUserSpec | None = None
+    archived_by: dict | None = None
 
     @classmethod
-    def perform_extra_serialization(cls, mapping, obj):
+    def perform_extra_serialization(cls, mapping, obj, *args, **kwargs):
         super().perform_extra_serialization(mapping, obj)
-        for field in ("created_by", "updated_by", "archived_by"):
-            user = getattr(obj, field)
-            mapping[field] = DicomStudyUserSpec.serialize(user).to_json() if user else None
+        if obj.archived_by_id:
+            mapping["archived_by"] = model_from_cache(DicomStudyUserSpec, id=obj.archived_by_id)
+
+
+class DicomStudyRetrieveSpec(DicomStudyReadSpec, DicomStudyArchiveStateSpec):
+    pass
 
 
 class DicomWorklistQuerySpec(BaseModel):

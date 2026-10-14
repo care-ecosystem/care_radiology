@@ -1,15 +1,16 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 import requests
-from care.emr.models.service_request import ServiceRequest
-from care.emr.models.tag_config import TagConfig
-from care.utils.shortcuts import get_object_or_404
 from django.core.cache import cache
 from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from care.emr.models.service_request import ServiceRequest
+from care.emr.models.tag_config import TagConfig
+from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
@@ -461,6 +462,26 @@ def fetch_study(dicom_study):
 
     cache.set(key, cachable, timeout=60 * 60)
     return {**cachable, "external_id": dicom_study.external_id}
+
+
+def fetch_studies(dicom_studies):
+    """
+    Fetches the PACS details of each study in parallel and returns them keyed by study id. A study
+    whose details cannot be fetched is logged and left out.
+    """
+
+    def fetch_or_none(dicom_study):
+        try:
+            return fetch_study(dicom_study)
+        except Exception:
+            logger.exception("Could not fetch study %s from PACS", dicom_study.dicom_study_uid)
+            return None
+
+    if not dicom_studies:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
+        results = executor.map(fetch_or_none, dicom_studies)
+    return {study.id: details for study, details in zip(dicom_studies, results, strict=True) if details}
 
 
 def _pacs_delete_timeout():
