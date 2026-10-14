@@ -240,197 +240,7 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
-  /api/care_radiology/dicom/upload/:
-    post:
-      tags:
-        - DICOM Studies
-      summary: Upload DICOM file
-      description: |
-        Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
-        the study UID is extracted from the response, and a `DicomStudy` record is
-        created or updated in CARE and linked to the given service request's
-        `ImagingStudy`. The study is then cached and returned.
-
-        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
-        must match `ImagingStudy.accession_number` of the service request. When it is off,
-        the accession number is not checked.
-
-        Requires `can_write_radiology_data` permission on the service request's facility.
-      operationId: dicomUpload
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - patient_id
-                - service_request_id
-                - file
-              properties:
-                patient_id:
-                  type: string
-                  format: uuid
-                  description: Patient external_id
-                service_request_id:
-                  type: string
-                  format: uuid
-                  description: ServiceRequest external_id the study is linked to. Must belong to the patient.
-                file:
-                  type: string
-                  format: binary
-                  description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
-      responses:
-        '201':
-          description: DICOM file uploaded, study record created/updated and linked to the service request
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "DICOM files uploaded to DCM4CHE successfully"
-                  study_uid:
-                    type: string
-                    description: DICOM Study Instance UID
-                    example: "1.2.840.10008.5.1.4.1.1.2.1234"
-                  study:
-                    $ref: '#/components/schemas/DicomStudyDetail'
-                  service_request_id:
-                    type: string
-                    format: uuid
-                    description: ServiceRequest external_id the study was linked to
-        '400':
-          description: |
-            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
-            request does not belong to the patient. When
-            `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
-            file's accession number is unreadable, missing, or does not match
-            `ImagingStudy.accession_number`.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              examples:
-                missing_fields:
-                  value:
-                    errors:
-                      - type: "validation_error"
-                        msg:
-                          file: ["This value is required"]
-                          patient_id: ["This value is required"]
-                          service_request_id: ["This value is required"]
-                bad_extension:
-                  value:
-                    errors:
-                      - type: "validation_error"
-                        msg:
-                          file: ["Only .dcm and .dicom files are supported"]
-                accession_number_mismatch:
-                  summary: Only when CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER is on
-                  value:
-                    errors:
-                      - type: "accession_number_mismatch"
-                        msg: "Accession number in the DICOM file does not match the service request"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          description: |
-            The file reached DCM4CHEE, but the study is already linked to a different service
-            request. `uploaded: true` tells the caller not to retry the upload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "study_link_conflict"
-                    msg: "Study is already linked to a different service request: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
-                    uploaded: true
-                    study_uid: "1.2.840.10008.5.1.4.1.1.2.1234"
-        '502':
-          description: DCM4CHEE upload failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "dicom_upload_error"
-                    msg: "Failed to upload to DCM4CHE"
-                    status_code: 503
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /api/care_radiology/dicom/{id}/archive/:
-    post:
-      tags:
-        - DICOM Studies
-      summary: Archive a DICOM study
-      description: |
-        Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
-        `archived_datetime`, and `archived_by`. The row is never deleted.
-        Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
-
-        The study must already be linked to a service request (via `upload`, or via
-        `upload_dicom_external` when its accession number matched) — archiving is rejected
-        otherwise, since authorization is resolved through
-        `imaging_study.service_request.facility`. A study that `upload_dicom_external`
-        stored unlinked therefore cannot be archived through this API. Requires
-        `can_write_radiology_data` permission on that facility.
-
-        There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
-        archive actions.
-      operationId: archiveDicomStudy
-      parameters:
-        - $ref: '#/components/parameters/Id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DicomStudyArchiveRequest'
-            example:
-              archive_reason: "Duplicate upload, superseded by a later study"
-      responses:
-        '200':
-          description: Study archived
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DicomStudyArchiveState'
-        '400':
-          description: |
-            Payload failed validation against `DicomStudyArchiveSpec` (missing/empty
-            `archive_reason`), or the study is not linked to a service request.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              examples:
-                missing_reason:
-                  value:
-                    errors:
-                      - type: "missing"
-                        loc: ["archive_reason"]
-                        msg: "Field required"
-                not_linked:
-                  value:
-                    errors:
-                      - type: "validation_error"
-                        msg:
-                          detail: "Cannot archive a study that is not linked to a service request"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+  
 
   # ---------- Webhooks ----------
   /api/care_radiology/webhooks/status/:
@@ -523,7 +333,7 @@ paths:
                 detail: "Error updating tags"
 
   # ---------- Imaging Study ----------
-  /api/care_radiology/imaging_study/:
+  /api/care_radiology/patient/{patient_id}/imaging_study/:
     get:
       tags:
         - Imaging Study
@@ -545,6 +355,13 @@ paths:
           in: query
           required: true
           description: Encounter external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+        - name: patient_id
+          in: path
+          required: true
+          description: patient external_id (UUID)
           schema:
             type: string
             format: uuid
@@ -584,7 +401,7 @@ paths:
                   - type: "object_not_found"
                     msg: "No Encounter matches the given query."
 
-  /api/care_radiology/imaging_study/{serviceRequestId}/:
+  /api/care_radiology/patient/{patient_id}/imaging_study/{serviceRequestId}/:
     get:
       tags:
         - Imaging Study
@@ -603,6 +420,13 @@ paths:
           in: path
           required: true
           description: ServiceRequest external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+        - name: patient_id
+          in: path
+          required: true
+          description: patient external_id (UUID)
           schema:
             type: string
             format: uuid
@@ -702,6 +526,219 @@ paths:
                   - type: "object_not_found"
                     msg: "No ImagingStudy matches the given query."
 
+
+  /api/care_radiology/patient/{patient_id}/imaging_study/upload/:
+    post:
+      tags:
+        - Imaging Study
+      summary: Upload DICOM file in Imaging Study
+      description: |
+        Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
+        the study UID is extracted from the response, and a `DicomStudy` record is
+        created or updated in CARE and linked to the given service request's
+        `ImagingStudy`. The study is then cached and returned.
+
+        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
+        must match `ImagingStudy.accession_number` of the service request. When it is off,
+        the accession number is not checked.
+
+        Requires `can_write_radiology_data` permission on the service request's facility.
+      operationId: dicomUpload
+      parameters:
+      - name: patient_id
+        in: path
+        required: true
+        description: patient external_id (UUID)
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - encounter_id
+                - file
+              properties:
+                encounter_id:
+                  type: string
+                  format: uuid
+                  description: encounter external_id
+                service_request_id:
+                  type: string
+                  format: uuid
+                  description: ServiceRequest external_id the study is linked to. Must belong to the patient.
+                file:
+                  type: string
+                  format: binary
+                  description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
+      responses:
+        '201':
+          description: DICOM file uploaded, study record created/updated and linked to the service request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "DICOM files uploaded to DCM4CHE successfully"
+                  study_uid:
+                    type: string
+                    description: DICOM Study Instance UID
+                    example: "1.2.840.10008.5.1.4.1.1.2.1234"
+                  study:
+                    $ref: '#/components/schemas/DicomStudyDetail'
+                  service_request_id:
+                    type: string
+                    format: uuid
+                    description: ServiceRequest external_id the study was linked to
+        '400':
+          description: |
+            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
+            request does not belong to the patient. When
+            `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
+            file's accession number is unreadable, missing, or does not match
+            `ImagingStudy.accession_number`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_fields:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          file: ["This value is required"]
+                          patient_id: ["This value is required"]
+                          service_request_id: ["This value is required"]
+                bad_extension:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          file: ["Only .dcm and .dicom files are supported"]
+                accession_number_mismatch:
+                  summary: Only when CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER is on
+                  value:
+                    errors:
+                      - type: "accession_number_mismatch"
+                        msg: "Accession number in the DICOM file does not match the service request"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The file reached DCM4CHEE, but the study is already linked to a different service
+            request. `uploaded: true` tells the caller not to retry the upload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "study_link_conflict"
+                    msg: "Study is already linked to a different service request: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    uploaded: true
+                    study_uid: "1.2.840.10008.5.1.4.1.1.2.1234"
+        '502':
+          description: DCM4CHEE upload failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "dicom_upload_error"
+                    msg: "Failed to upload to DCM4CHE"
+                    status_code: 503
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/care_radiology/patient/{patient_id}/imaging_study/{study_id}/archive/:
+    post:
+      tags:
+        - Imaging Study
+      summary: Archive a DICOM study in Imaging Study
+      description: |
+        Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
+        `archived_datetime`, and `archived_by`. The row is never deleted.
+        Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
+
+        The study must already be linked to a service request (via `upload`, or via
+        `upload_dicom_external` when its accession number matched) — archiving is rejected
+        otherwise, since authorization is resolved through
+        `imaging_study.service_request.facility`. A study that `upload_dicom_external`
+        stored unlinked therefore cannot be archived through this API. Requires
+        `can_write_radiology_data` permission on that facility.
+
+        There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
+        archive actions.
+      operationId: archiveDicomStudy
+      parameters:
+        
+        - name: study_id
+          in: path
+          required: true
+          description: dicom study external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+        - name: patient_id
+          in: path
+          required: true
+          description: patient external_id (UUID)
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DicomStudyArchiveRequest'
+            example:
+              archive_reason: "Duplicate upload, superseded by a later study"
+      responses:
+        '200':
+          description: Study archived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DicomStudyArchiveState'
+        '400':
+          description: |
+            Payload failed validation against `DicomStudyArchiveSpec` (missing/empty
+            `archive_reason`), or the study is not linked to a service request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_reason:
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["archive_reason"]
+                        msg: "Field required"
+                not_linked:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          detail: "Cannot archive a study that is not linked to a service request"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'  
   # ---------- Observation Result Templates ----------
   /api/care_radiology/observation_result_template/:
     get:
