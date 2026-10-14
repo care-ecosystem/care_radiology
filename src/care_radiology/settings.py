@@ -47,7 +47,7 @@ class PluginSettings:  # pragma: no cover
         # Try to find the setting from user settings, then from environment variables
         val = self.defaults[attr]
         try:
-            val = self.user_settings[attr]
+            val = self._coerce(self.user_settings[attr], val)
         except KeyError:
             try:
                 val = env(attr, cast=type(val))
@@ -62,6 +62,30 @@ class PluginSettings:  # pragma: no cover
         self._cached_attrs.add(attr)
         setattr(self, attr, val)
         return val
+
+    @staticmethod
+    def _coerce(val: Any, default: Any) -> Any:
+        """
+        Parse a PLUGIN_CONFIGS value the same way an environment variable is parsed.
+
+        PLUGIN_CONFIGS entries are frequently built with a bare os.getenv(), so a
+        non-string setting arrives here as a string -- and bool("False") is True,
+        silently inverting every flag the deployment tried to turn off. Values that
+        already have the right type (or that the plugin declares as strings) pass
+        through untouched.
+
+        A None means the key was declared but never given a value (an unset
+        os.getenv()); treat that as absent via KeyError so the environment variable
+        and then the default still get their turn.
+        """
+        if val is None:
+            raise KeyError
+        if not isinstance(val, str) or isinstance(default, str) or default is None:
+            return val
+        try:
+            return env.parse_value(val, type(default))
+        except ValueError:
+            return val
 
     @property
     def user_settings(self) -> dict:
