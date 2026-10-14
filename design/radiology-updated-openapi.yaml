@@ -537,15 +537,21 @@ paths:
       description: |
         Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
         the study UID is extracted from the response, and a `DicomStudy` record is
-        created or updated in CARE and linked to the given service request's
-        `ImagingStudy`, which adds it to that imaging study's `studies[]`. The study is then cached
-        and returned.
+        created or updated in CARE and linked to an `ImagingStudy`, which adds it to that
+        imaging study's `studies[]`. The study is then cached and returned.
 
-        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
-        must match `ImagingStudy.accession_number` of the service request. When it is off,
-        the accession number is not checked.
+        With `service_request_id`, the study is linked to that service request's
+        `ImagingStudy`. Without it, the study is linked to the encounter's one `ImagingStudy`
+        without a service request, created on the first such upload; that imaging study is
+        listed for the encounter with `service_request: null` and cannot be retrieved by
+        service request.
 
-        Requires `can_write_radiology_data` permission on the service request's facility.
+        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on and `service_request_id` is
+        given, the file's accession number must match `ImagingStudy.accession_number` of the
+        service request. Otherwise the accession number is not checked.
+
+        Requires `can_write_radiology_data` permission on the service request's facility, or
+        on the encounter's facility when no service request is given.
       operationId: dicomUpload
       requestBody:
         required: true
@@ -560,18 +566,21 @@ paths:
                 encounter_id:
                   type: string
                   format: uuid
-                  description: Encounter external_id the service request belongs to. Must belong to the patient.
+                  description: Encounter external_id. Must belong to the patient.
                 service_request_id:
                   type: string
                   format: uuid
-                  description: ServiceRequest external_id the study is linked to. Must belong to the patient.
+                  description: |
+                    Optional. ServiceRequest external_id the study is linked to. Must belong to
+                    the patient and to the encounter. When omitted, the study is linked to the
+                    encounter's imaging study without a service request.
                 file:
                   type: string
                   format: binary
                   description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
       responses:
         '201':
-          description: DICOM file uploaded, study record created/updated and linked to the service request
+          description: DICOM file uploaded, study record created/updated and linked to an imaging study
           content:
             application/json:
               schema:
@@ -589,12 +598,12 @@ paths:
                   service_request_id:
                     type: string
                     format: uuid
-                    description: ServiceRequest external_id the study was linked to
+                    description: ServiceRequest external_id the study was linked to; absent when no `service_request_id` was given
         '400':
           description: |
-            A required field is missing, the file is not a `.dcm` / `.dicom`, or the encounter
-            or service request does not belong to the patient. When
-            `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
+            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
+            request is not of the encounter. When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on and
+            `service_request_id` is given, this is also returned if the
             file's accession number is unreadable, missing, or does not match
             `ImagingStudy.accession_number`, or the service request has no `ImagingStudy`
             (`imaging_study_missing`).
@@ -610,7 +619,6 @@ paths:
                         msg:
                           file: ["This value is required"]
                           encounter_id: ["This value is required"]
-                          service_request_id: ["This value is required"]
                 bad_extension:
                   value:
                     errors:
@@ -628,7 +636,15 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: No such patient, or no encounter or service request with this external_id for the patient
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Encounter matches the given query."
         '409':
           description: |
             The file reached DCM4CHEE, but the study is already linked to a different service

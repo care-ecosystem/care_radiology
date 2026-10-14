@@ -7,11 +7,6 @@ from care.users.models import User
 from care_radiology.models.dicom_study import DicomStudy
 
 
-class DicomStudyLinkSpec(BaseModel):
-    service_request_id: UUID4
-    study_uid: str = Field(min_length=1)
-
-
 class DicomStudyArchiveSpec(BaseModel):
     archive_reason: str = Field(min_length=1)
 
@@ -55,6 +50,8 @@ class DicomStudyReadSpec(DicomStudyBaseSpec):
     study_description: str | None = None
     study_modalities: list[str] = []
     study_series: list[dict] = []
+    number_of_series: int | None = None
+    number_of_instances: int | None = None
 
     @classmethod
     def perform_extra_serialization(cls, mapping, obj, *args, pacs_details, **kwargs):
