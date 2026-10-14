@@ -27,7 +27,7 @@ tags:
     description: Upload DICOM files, serve the modality worklist, and archive studies
   - name: Webhooks
     description: Receive DICOM study and MPPS status notifications from the modality worklist server
-  - name: Observation Templates
+  - name: Observation Result Templates
     description: Manage per-facility reusable observation templates used to structure diagnostic report observations
   - name: Imaging Study
     description: Read imaging studies (status, accession number) with their core service request, encounter, activity definition and diagnostic reports, and update their status
@@ -534,7 +534,6 @@ paths:
           schema:
             type: string
             format: uuid
-        - $ref: '#/components/parameters/IncludeArchived'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -545,7 +544,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing, or `include_archived` is not `true`/`false`'
+          description: '`encounter` is missing,'
           content:
             application/json:
               schema:
@@ -556,12 +555,6 @@ paths:
                     errors:
                       - type: "validation_error"
                         msg: "encounter is required"
-                invalid_include_archived:
-                  value:
-                    errors:
-                      - type: "validation_error"
-                        msg:
-                          include_archived: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -651,7 +644,6 @@ paths:
           schema:
             type: string
             format: uuid
-        - $ref: '#/components/parameters/IncludeArchived'
       requestBody:
         required: true
         content:
@@ -668,7 +660,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
         '400':
-          description: '`status` is missing or not one of the allowed values, or `include_archived` is not `true`/`false`'
+          description: '`status` is missing or not one of the allowed values'
           content:
             application/json:
               schema:
@@ -693,18 +685,18 @@ paths:
                   - type: "object_not_found"
                     msg: "No ImagingStudy matches the given query."
 
-  # ---------- Observation Templates ----------
-  /api/care_radiology/observation_template/:
+  # ---------- Observation Result Templates ----------
+  /api/care_radiology/observation_result_template/:
     get:
       tags:
-        - Observation Templates
-      summary: List observation templates
+        - Observation Result Templates
+      summary: List observation result templates
       description: |
-        Returns observation templates for a facility. `facility` is required.
+        Returns observation result templates for a facility. `facility` is required.
         Optionally filter by `observation_definition`, `activity_definition`,
         or `title` (case-insensitive contains).
 
-        Requires `can_read_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_read_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: listObservationTemplates
       parameters:
         - name: facility
@@ -723,6 +715,12 @@ paths:
         - name: activity_definition
           in: query
           description: Filter by ActivityDefinition external_id
+          schema:
+            type: string
+            format: uuid
+        - name: created_by
+          in: query
+          description: Filter by Created by Users external_id
           schema:
             type: string
             format: uuid
@@ -759,14 +757,14 @@ paths:
 
     post:
       tags:
-        - Observation Templates
-      summary: Create observation template
+        - Observation Result Templates
+      summary: Create observation result template
       description: |
         Creates a new observation template for a facility, with a set of fields
         (code/value/description) replacing any existing fields. `title` must be
         unique per facility.
 
-        Requires `can_write_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_write_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: createObservationTemplate
       requestBody:
         required: true
@@ -798,16 +796,16 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
-  /api/care_radiology/observation_template/{id}/:
+  /api/care_radiology/observation_result_template/{id}/:
     patch:
       tags:
-        - Observation Templates
-      summary: Update observation template
+        - Observation Result Templates
+      summary: Update observation result template
       description: |
         Partially updates `title` and/or `description` of an existing observation
         template. Fields (code/value/description) cannot be changed via update.
 
-        Requires `can_write_radiology_observation_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_write_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
       operationId: updateObservationTemplate
       parameters:
         - $ref: '#/components/parameters/Id'
