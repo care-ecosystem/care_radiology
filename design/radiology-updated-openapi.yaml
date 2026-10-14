@@ -136,6 +136,11 @@ paths:
         server, HIS integration). The file is forwarded to DCM4CHEE and a `DicomStudy`
         record is created or updated in CARE.
 
+        The study is then linked to its service request the same way `upload` does: the
+        `ImagingStudy` is found by the file's Accession Number (0008,0050), among this
+        patient's non-deleted service requests. A file with no readable accession number, or
+        one no `ImagingStudy` of this patient has, is uploaded unlinked.
+
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
       operationId: dicomUploadExternal
@@ -163,7 +168,7 @@ paths:
                     by the extension.
       responses:
         '201':
-          description: DICOM file uploaded and study record created/updated
+          description: DICOM file uploaded and study record created/updated, and linked when the accession number matched
           content:
             application/json:
               schema:
@@ -178,6 +183,10 @@ paths:
                     example: "1.2.840.10008.5.1.4.1.1.2.1234"
                   study:
                     $ref: '#/components/schemas/DicomStudyDetail'
+                  service_request_id:
+                    type: string
+                    format: uuid
+                    description: ServiceRequest external_id the study was linked to; absent when it was uploaded unlinked
         '400':
           description: |
             No file or patient_id provided. The filename is deliberately not checked on this
@@ -197,6 +206,20 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The file reached DCM4CHEE, but the study is already linked to a different service
+            request. `uploaded: true` tells the caller not to retry the upload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "study_link_conflict"
+                    msg: "Study is already linked to a different service request: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    uploaded: true
+                    study_uid: "1.2.840.10008.5.1.4.1.1.2.1234"
         '502':
           description: DCM4CHEE upload failed
           content:
@@ -225,8 +248,7 @@ paths:
         When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
         must match `ImagingStudy.accession_number` of the service request.
 
-        Requires `can_write_patient_obj` permission on the patient and
-        `can_write_radiology_data` permission on the given facility.
+        Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: dicomUpload
       requestBody:
         required: true
@@ -236,7 +258,6 @@ paths:
               type: object
               required:
                 - patient_id
-                - facility_id
                 - service_request_id
                 - file
               properties:
@@ -244,10 +265,6 @@ paths:
                   type: string
                   format: uuid
                   description: Patient external_id
-                facility_id:
-                  type: string
-                  format: uuid
-                  description: Facility external_id — used to authorize this upload against radiology data permissions
                 service_request_id:
                   type: string
                   format: uuid
@@ -293,7 +310,6 @@ paths:
                       - type: "validation_error"
                         msg:
                           file: ["This value is required"]
-                          facility_id: ["This value is required"]
                           patient_id: ["This value is required"]
                           service_request_id: ["This value is required"]
                 bad_extension:
@@ -352,7 +368,7 @@ paths:
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
         The study must already be linked to a service request (via `upload` or
-        `webhooks/study`) — archiving is rejected otherwise, since authorization is resolved through
+        `upload_dicom_external`) — archiving is rejected otherwise, since authorization is resolved through
         `imaging_study.service_request.facility`. Requires
         `can_write_radiology_data` permission on that facility.
 
@@ -405,80 +421,6 @@ paths:
           $ref: '#/components/responses/NotFound'
 
   # ---------- Webhooks ----------
-  /api/care_radiology/webhooks/study/:
-    post:
-      tags:
-        - Webhooks
-      summary: Receive DICOM study notification
-      description: |
-        Webhook endpoint called by the DICOM worklist server when a study is completed.
-        Authenticated with static API key.
-
-        Links the study to the `ImagingStudy` whose `accession_number` matches.
-        The worklist puts the accession number in every image, so it is the only lookup
-        key; this relies on accession numbers being unique.
-
-        All payloads are persisted to `RadiologyWebhookLogs`.
-      operationId: webhookStudy
-      security:
-        - StaticApiKey: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/WebhookStudyPayload'
-            example:
-              accession_number: "ACJAYCTO26000004"
-              study_id: "1.2.840.10008.5.1.4.1.1.2.1234567890"
-      responses:
-        '200':
-          description: Webhook received and processed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WebhookStudyResponse'
-        '400':
-          description: |
-            Payload failed validation against `WebhookStudySpec` — missing `accession_number`
-            or `study_id`. A malformed JSON
-            body (unparseable syntax) instead returns DRF's default `{"detail": ...}` shape —
-            see the `Error` schema.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              examples:
-                missing_study_id:
-                  value:
-                    errors:
-                      - type: "missing"
-                        loc: ["study_id"]
-                        msg: "Field required"
-                missing_accession_number:
-                  value:
-                    errors:
-                      - type: "missing"
-                        loc: ["accession_number"]
-                        msg: "Field required"
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '409':
-          description: |
-            No `ImagingStudy` has this `accession_number`, or the `study_id` is
-            already linked to a different service request's `ImagingStudy`.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                no_service_request:
-                  value:
-                    detail: "No matching service request"
-                study_conflict:
-                  value:
-                    detail: "Study is already linked to a different service request"
-
   /api/care_radiology/webhooks/status/:
     post:
       tags:
@@ -575,7 +517,9 @@ paths:
       summary: List imaging studies for an encounter
       description: |
         Returns the `ImagingStudy` rows of an encounter, newest first, filtered on
-        `ImagingStudy.encounter`. Each has the same body as the retrieve.
+        `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each has
+        the encounter and service request from core base specs only; use the retrieve for the
+        full service request.
         To fetch a single one by service request, use
         `GET /imaging_study/{serviceRequestId}/`.
 
@@ -590,6 +534,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -600,15 +545,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing'
+          description: '`encounter` is missing, or `include_archived` is not `true`/`false`'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "validation_error"
-                    msg: "encounter is required"
+              examples:
+                missing_encounter:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg: "encounter is required"
+                invalid_include_archived:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          include_archived: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -631,9 +584,8 @@ paths:
       summary: Get an imaging study
       description: |
         Returns the `ImagingStudy` (status and accession number) linked to a CARE
-        `ServiceRequest`, with its core `service_request`, `encounter`, `activity_definition` and
-        `diagnostic_reports`, looked up by the service request's own `external_id` — not the
-        `ImagingStudy`'s own `id`.
+        `ServiceRequest`, with its `encounter` and core `service_request`, looked up by the
+        service request's own `external_id` — not the `ImagingStudy`'s own `id`.
 
         Requires `can_read_service_request` permission on the service request, plus
         `can_read_radiology_data` permission on its facility.
@@ -646,6 +598,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
       responses:
         '200':
           description: Imaging study metadata
@@ -653,12 +606,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
+        '400':
+          description: '`include_archived` is not `true`/`false`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "validation_error"
+                    msg:
+                      include_archived: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, or it has no linked ImagingStudy
+          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -687,6 +651,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IncludeArchived'
       requestBody:
         required: true
         content:
@@ -703,7 +668,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
         '400':
-          description: '`status` is missing or not one of the allowed values'
+          description: '`status` is missing or not one of the allowed values, or `include_archived` is not `true`/`false`'
           content:
             application/json:
               schema:
@@ -718,7 +683,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No service request with this external_id, or it has no linked ImagingStudy
+          description: No service request with this external_id, it is deleted, or it has no linked ImagingStudy
           content:
             application/json:
               schema:
@@ -767,8 +732,8 @@ paths:
           schema:
             type: string
         - $ref: '#/components/parameters/Ordering'
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Paginated list of observation templates
@@ -902,21 +867,13 @@ components:
       schema:
         type: string
         format: uuid
-    Page:
-      name: page
+    IncludeArchived:
+      name: include_archived
       in: query
+      description: Include archived DICOM studies in `studies[]`
       schema:
-        type: integer
-        minimum: 1
-        default: 1
-    PageSize:
-      name: page_size
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 100
-        default: 20
+        type: boolean
+        default: false
     Limit:
       name: limit
       in: query
@@ -943,20 +900,6 @@ components:
 
   schemas:
     # ===================== Shared =====================
-    LiteUser:
-      type: object
-      description: Minimal user representation used in created_by / updated_by fields
-      properties:
-        external_id:
-          type: string
-          format: uuid
-        first_name:
-          type: string
-        last_name:
-          type: string
-        username:
-          type: string
-
     PaginatedMeta:
       type: object
       description: CARE's `CareLimitOffsetPagination` body, which has no `next` / `previous` links
@@ -998,12 +941,14 @@ components:
 
     DicomStudyDetail:
       type: object
-      description: DICOM study metadata fetched from DCM4CHEE, combined with CARE record fields
+      description: |
+        DICOM study metadata fetched from DCM4CHEE (cached for an hour) plus the CARE record's
+        id, as returned in the upload responses' `study`
       properties:
-        external_id:
+        id:
           type: string
           format: uuid
-          description: CARE DicomStudy external_id
+          description: DicomStudy external_id
         study_uid:
           type: string
           description: DICOM Study Instance UID
@@ -1012,8 +957,10 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Study date/time in ISO 8601 format
-          example: "2026-06-01T10:30:00"
+          description: |
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
+            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+          example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
           nullable: true
@@ -1028,17 +975,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DicomSeries'
-        is_archived:
-          type: boolean
-          description: Whether this study has been archived.
-        archive_reason:
-          type: string
-          description: Reason the study was archived. Empty string when the study is not archived.
-          example: "Duplicate upload, superseded by a later study"
-        archived_datetime:
-          type: string
-          format: date-time
-          nullable: true
 
     DicomStudyArchiveRequest:
       type: object
@@ -1052,13 +988,13 @@ components:
 
     DicomStudyArchiveState:
       type: object
-      description: DB-only view of a DicomStudy's archive state, returned by the archive action
+      description: DB-only view of a DicomStudy (`DicomStudyArchiveStateSpec`), returned by the archive action
       properties:
         id:
           type: string
           format: uuid
           description: DicomStudy external_id
-        dicom_study_uid:
+        study_uid:
           type: string
           description: DICOM Study Instance UID
         is_archived:
@@ -1069,8 +1005,17 @@ components:
           type: string
           format: date-time
           nullable: true
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
         archived_by:
-          $ref: '#/components/schemas/LiteUser'
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
           nullable: true
 
     WorklistEntry:
@@ -1151,16 +1096,16 @@ components:
               type: string
 
     # ===================== Imaging Study =====================
-    ImagingStudy:
+    ImagingStudyListItem:
       type: object
       description: |
-        Radiology-specific metadata linked 1:1 to a CARE ServiceRequest. Every nested object is
-        serialized with a core base spec (columns only, no extra queries).
+        List body of an ImagingStudy (`ImagingStudyReadSpec`). `encounter` and `service_request`
+        use core base specs; the newest report and the studies are prefetched for the whole
+        page, and each study's DCM4CHEE details come from a one-hour cache.
       required:
         - id
         - status
         - encounter
-        - diagnostic_reports
       properties:
         id:
           type: string
@@ -1172,17 +1117,23 @@ components:
         accession_number:
           type: string
           nullable: true
-          description: |
-            Accession number generated for this service request. This is its only copy.
-            Null until the accession task has run for the request.
           example: "ACJAYCTO26000004"
+        encounter:
+          $ref: '#/components/schemas/ImagingStudyEncounter'
         service_request:
           allOf:
             - $ref: '#/components/schemas/ImagingStudyServiceRequest'
           nullable: true
           description: Null when the ImagingStudy has no linked ServiceRequest
-        encounter:
-          $ref: '#/components/schemas/ImagingStudyEncounter'
+        studies:
+          type: array
+          description: |
+            DICOM studies linked to this imaging study, newest first, with live metadata from
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            load, is left out (and logged) instead of failing the response.
+          items:
+            $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
     ImagingStudyServiceRequest:
       type: object
@@ -1230,16 +1181,96 @@ components:
         patient_instruction:
           type: string
           nullable: true
-        activity_definition:
-          allOf:
-            - $ref: '#/components/schemas/ImagingStudyActivityDefinition'
-          nullable: true
-          description: The service request's ActivityDefinition; null when it has none
         diagnostic_reports:
           type: array
-          description: The service request's DiagnosticReports (soft-deleted ones excluded)
+          items: 
+            allOf:
+              - $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
+            nullable: true
+            description: The service request's newest DiagnosticReport; null when it has none
+
+    ImagingStudy:
+      type: object
+      description: |
+        Retrieve (and PATCH) body of an ImagingStudy (`ImagingStudyRetrieveSpec`), linked 1:1 to
+        a CARE ServiceRequest. Same as `ImagingStudyListItem`, except `service_request` is the
+        core retrieve body.
+      required:
+        - id
+        - status
+        - encounter
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ImagingStudy external_id
+        status:
+          type: string
+          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+        accession_number:
+          type: string
+          nullable: true
+          description: |
+            Accession number generated for this service request. This is its only copy.
+            Null until the accession task has run for the request.
+          example: "ACJAYCTO26000004"
+        encounter:
+          $ref: '#/components/schemas/ImagingStudyEncounter'
+        service_request:
+          allOf:
+            - $ref: '#/components/schemas/ImagingStudyServiceRequestDetail'
+          nullable: true
+          description: Null when the ImagingStudy has no linked ServiceRequest
+        studies:
+          type: array
+          description: |
+            DICOM studies linked to this imaging study, newest first, with live metadata from
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            load, is left out (and logged) instead of failing the response.
           items:
-            $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
+            $ref: '#/components/schemas/ImagingStudyDicomStudy'
+
+    ImagingStudyServiceRequestDetail:
+      description: |
+        Core CARE ServiceRequest, serialized with core `ServiceRequestRetrieveSpec` — the same
+        body as core `GET /api/v1/facility/{facility}/service_request/{id}/`, but without
+        `encounter` (it is at the root of `ImagingStudy`), `specimens` and `tags`.
+      allOf:
+        - $ref: '#/components/schemas/ImagingStudyServiceRequest'
+        - type: object
+          properties:
+            created_date:
+              type: string
+              format: date-time
+            modified_date:
+              type: string
+              format: date-time
+            requester:
+              type: object
+              nullable: true
+              description: Requesting user (core `UserSpec`)
+            locations:
+              type: array
+              description: Facility locations (core `FacilityLocationListSpec`)
+              items:
+                type: object
+            healthcare_service:
+              type: object
+              nullable: true
+              description: Core `HealthcareServiceReadSpec`
+            activity_definition:
+              type: object
+              nullable: true
+              description: Core `ActivityDefinitionReadSpec`
+            created_by:
+              type: object
+              nullable: true
+              description: Core `UserSpec`
+            updated_by:
+              type: object
+              nullable: true
+              description: Core `UserSpec`
 
     ImagingStudyEncounter:
       type: object
@@ -1271,48 +1302,60 @@ components:
           type: string
           nullable: true
 
-    ImagingStudyActivityDefinition:
+    ImagingStudyDicomStudy:
       type: object
-      description: Core CARE ActivityDefinition, serialized with core `BaseActivityDefinitionSpec`
-      required:
-        - id
-        - title
-        - status
-        - classification
-        - kind
-        - code
+      description: A DICOM study as returned inside an ImagingStudy (`DicomStudyReadSpec`)
       properties:
         id:
           type: string
           format: uuid
-          description: ActivityDefinition external_id
-        title:
+          description: DicomStudy external_id
+        study_uid:
           type: string
-        derived_from_uri:
+          description: DICOM Study Instance UID
+          example: "1.2.840.10008.5.1.4.1.1.2.1234567890"
+        study_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
+            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+          example: "2026-06-01T10:30:00+05:30"
+        study_description:
           type: string
           nullable: true
-        status:
-          type: string
-        description:
-          type: string
-        usage:
-          type: string
-        classification:
-          type: string
-        kind:
-          type: string
-        code:
-          type: object
-          description: Coding (system, code, display)
-        body_site:
-          type: object
-          nullable: true
-          description: Coding (system, code, display)
-        diagnostic_report_codes:
+          example: "CHEST PA"
+        study_modalities:
           type: array
           items:
-            type: object
-            description: Coding (system, code, display)
+            type: string
+          example: ["CT"]
+        study_series:
+          type: array
+          items:
+            $ref: '#/components/schemas/DicomSeries'
+        is_archived:
+          type: boolean
+        archive_reason:
+          type: string
+          description: Empty string when the study is not archived
+        archived_datetime:
+          type: string
+          format: date-time
+          nullable: true
+        created_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        updated_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
+        archived_by:
+          allOf:
+            - $ref: '#/components/schemas/DicomStudyUser'
+          nullable: true
 
     ImagingStudyDiagnosticReport:
       type: object
@@ -1342,6 +1385,26 @@ components:
           type: string
           nullable: true
 
+    DicomStudyUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: User external_id
+        username:
+          type: string
+        prefix:
+          type: string
+          nullable: true
+        first_name:
+          type: string
+        last_name:
+          type: string
+        suffix:
+          type: string
+          nullable: true
+
     ImagingStudyStatusUpdate:
       type: object
       required:
@@ -1359,45 +1422,9 @@ components:
             results:
               type: array
               items:
-                $ref: '#/components/schemas/ImagingStudy'
+                $ref: '#/components/schemas/ImagingStudyListItem'
 
     # ===================== Webhooks =====================
-    WebhookStudyPayload:
-      type: object
-      description: |
-        Additional fields in the payload are stored verbatim in RadiologyWebhookLogs.
-      required:
-        - accession_number
-        - study_id
-      properties:
-        accession_number:
-          type: string
-          description: Accession number, looked up via ImagingStudy.accession_number
-          example: "ACJAYCTO26000004"
-        study_id:
-          type: string
-          description: DICOM Study Instance UID
-          example: "1.2.840.10008.5.1.4.1.1.2.1234567890"
-      additionalProperties: true
-
-    WebhookStudyResponse:
-      type: object
-      properties:
-        detail:
-          type: string
-          example: "Webhook received and saved successfully"
-        record:
-          type: object
-          description: Created or retrieved record summary
-          properties:
-            external_id:
-              type: string
-              format: uuid
-              description: ImagingStudy external_id
-            status:
-              type: string
-              enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
-
     WebhookStatusPayload:
       type: object
       required:
