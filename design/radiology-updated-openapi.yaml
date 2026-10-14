@@ -4,8 +4,10 @@ info:
   description: |
     API specification for the Radiology Plugin for CARE.
     This plugin enables radiology workflows within CARE:
-    - Upload DICOM files and link them to CARE service requests
-    - Read imaging studies with their core service request, encounter, activity definition and diagnostic reports
+    - Upload DICOM files, link them to CARE service requests, and archive them
+    - Read imaging studies with their encounter, core service request and linked DICOM studies.
+      The retrieve also includes the service request's activity definition, and each service
+      request carries its newest diagnostic report
     - Serve a DICOM modality worklist and receive MPPS status webhooks from the
       DICOM modality worklist server
     - Manage per-facility observation result templates used to structure diagnostic report
@@ -14,7 +16,9 @@ info:
     **Authentication:**
     - Standard CARE endpoints use JWT Bearer auth (Authorization: Bearer <token>).
     - DICOM worklist, external upload and webhook endpoints use a static API key
-      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). They live under the
+      `/facility/{facility_id}/external/` path prefix and are grouped under the
+      `External APIs` tag. The key is a single shared secret, not scoped to one facility.
 
   version: 1.0.0
 
@@ -24,13 +28,17 @@ servers:
 
 tags:
   - name: External APIs
-    description: Serve the modality worklist, validate JWTs for DICOMweb access, and accept external (static API key) DICOM uploads, Receive MPPS (Modality Performed Procedure Step) status notifications from the modality worklist server
-  - name: Observation Result Templates
-    description: Manage per-facility reusable observation result templates used to structure diagnostic report observations
+    description: |
+      Machine-to-machine endpoints authenticated with a static API key
+      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>): the modality worklist, DICOM upload
+      from external systems, and MPPS (Modality Performed Procedure Step) status
+      notifications from the modality worklist server
   - name: Imaging Study
     description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, update their status, upload DICOM files against a service request, and archive DICOM studies
-  - name: Dicom Studies
-    description: Read imaging studies (status, accession number) with their encounter, to authenticate user
+  - name: Observation Result Templates
+    description: Manage per-facility reusable observation result templates used to structure diagnostic report observations
+  - name: DICOM Studies
+    description: JWT verification used by the nginx auth_request proxy to protect DICOMweb access to DCM4CHEE
 
 security:
   - BearerAuth: []
@@ -52,22 +60,23 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  # ---------- External APIs (static API key) ----------
   /api/care_radiology/facility/{facility_id}/external/worklist/:
     get:
       tags:
         - External APIs
       summary: Get modality worklist
       description: |
-        Returns active service requests formatted for a DICOM modality worklist.
-        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
-        Optionally filter by modality device name, date range, or facility.
+        Returns the active service requests of the facility given in the path, formatted for a
+        DICOM modality worklist. Authenticated with static API key
+        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by modality device
+        name or date range.
 
         Each entry carries the `accession_number` from `ImagingStudy`, and the
         `devices` whose `current_location` is one of the service request's
         `activity_definition.locations` (narrowed to `modality` when given). Devices are
         fetched in one query for the whole worklist.
       operationId: dicomWorklist
-
       security:
         - StaticApiKey: []
       parameters:
@@ -125,25 +134,26 @@ paths:
       summary: Upload DICOM file (external / static API key)
       description: |
         Upload a DICOM file for a patient using a static API key instead of user JWT auth.
-        Any filename is accepted here — see the `file` field. Intended for machine-to-machine use (e.g. modality worklist
-        server, HIS integration). The file is forwarded to DCM4CHEE and a `DicomStudy`
-        record is created or updated in CARE.
+        Any filename is accepted here — see the `file` field. Intended for machine-to-machine
+        use (e.g. modality worklist server, HIS integration). The file is forwarded to
+        DCM4CHEE and a `DicomStudy` record is created or updated in CARE.
 
-        The study is then linked to its service request the same way the imaging study `upload` does: the
-        `ImagingStudy` is found by the file's Accession Number (0008,0050), among this
-        patient's non-deleted service requests. A file with no readable accession number, or
-        one no `ImagingStudy` of this patient has, is uploaded unlinked: the request still
-        succeeds with `201` and `service_request_id` is absent from the response. An unlinked
-        study cannot be archived through the API (see the imaging study archive endpoint), so callers should
-        check for the absence of `service_request_id`.
+        Unlike the imaging study `upload`, which takes an explicit `service_request_id`, this
+        endpoint links the study to its service request by the file's Accession Number
+        (0008,0050): the `ImagingStudy` is found among this patient's non-deleted service
+        requests of the facility in the path. A file with no readable accession number, or
+        one no such `ImagingStudy` has, is uploaded unlinked: the request still succeeds with
+        `201` and `service_request_id` is absent from the response. An unlinked study cannot
+        be archived through the API (see the imaging study archive endpoint), so callers
+        should check for the absence of `service_request_id`.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
       operationId: dicomUploadExternal
-      parameters:
-      - $ref: '#/components/parameters/FacilityId'
       security:
         - StaticApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/FacilityId'
       requestBody:
         required: true
         content:
@@ -206,7 +216,22 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: No facility or patient has the given id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                facility_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No Facility matches the given query."
+                patient_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No Patient matches the given query."
         '409':
           description: |
             The file reached DCM4CHEE, but the study is already linked to a different service
@@ -235,7 +260,6 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
-  # ---------- Webhooks ----------
   /api/care_radiology/facility/{facility_id}/external/imaging_study/status/:
     patch:
       tags:
@@ -243,20 +267,20 @@ paths:
       summary: Receive MPPS status update
       description: |
         Webhook endpoint called by the DICOM worklist server with Modality Performed
-        Procedure Step (MPPS) status updates. Maps `study_status` to a facility
-        `TagConfig` entry and appends it to `ServiceRequest.tags` (duplicates are
-        skipped). Authenticated with static API key. All payloads are persisted to
-        `RadiologyWebhookLogs` with `type="MPPS"`.
+        Procedure Step (MPPS) status updates for a service request of the facility given in
+        the path. Maps `study_status` to a facility `TagConfig` entry and appends it to
+        `ServiceRequest.tags` (duplicates are skipped). Authenticated with static API key.
+        All payloads are persisted to `RadiologyWebhookLogs` with `type="MPPS"`.
 
         `study_status` is expected to be one of `SCAN_STARTED`, `SCAN_COMPLETED`,
         `DISCONTINUED` (an unrecognized value is still processed, just logged as a
         warning) and must match a `TagConfig.display` value configured for the
         service request's facility.
       operationId: webhookStatus
-      parameters:
-      - $ref: '#/components/parameters/FacilityId'
       security:
         - StaticApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/FacilityId'
       requestBody:
         required: true
         content:
@@ -306,15 +330,22 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: ServiceRequest not found
+          description: Facility or ServiceRequest not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "object_not_found"
-                    msg: "No ServiceRequest matches the given query."
+              examples:
+                facility_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No Facility matches the given query."
+                service_request_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No ServiceRequest matches the given query."
         '500':
           description: |
             Unexpected database error while fetching the tag configuration or saving the
@@ -508,7 +539,8 @@ paths:
         Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
         the study UID is extracted from the response, and a `DicomStudy` record is
         created or updated in CARE and linked to the given service request's
-        `ImagingStudy`. The study is then cached and returned.
+        `ImagingStudy`, which adds it to that imaging study's `studies[]`. The study is then cached
+        and returned.
 
         When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
         must match `ImagingStudy.accession_number` of the service request. When it is off,
@@ -636,14 +668,16 @@ paths:
       summary: Archive a DICOM study of an imaging study
       description: |
         Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
-        `archived_datetime`, and `archived_by`. The row is never deleted.
+        `archived_datetime`, and `archived_by`. The row is never deleted. Once archived, the entry
+        is left out of the imaging study's `studies[]` unless `include_archived=true` is passed
+        to the retrieve.
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
         `study_id` is the `id` of an entry in an imaging study's `studies[]`. The study must
         already be linked to a service request (via the imaging study `upload`, or via
-        `upload_dicom_external` when its accession number matched) — archiving is rejected
+        the external upload (`dicomUploadExternal`) when its accession number matched) — archiving is rejected
         otherwise, since authorization is resolved through
-        `imaging_study.service_request.facility`. A study that `upload_dicom_external`
+        `imaging_study.service_request.facility`. A study that the external upload
         stored unlinked therefore cannot be archived through this API. Requires
         `can_write_radiology_data` permission on that facility.
 
@@ -988,7 +1022,9 @@ components:
       type: object
       description: |
         DICOM study metadata fetched from DCM4CHEE (cached for an hour) plus the CARE record's
-        id, as returned in the upload responses' `study`
+        id, as returned in the upload responses' `study`. Unlike `ImagingStudyDicomStudy`, it
+        does not include `number_of_series`, `number_of_instances` or the archive and audit
+        fields.
       properties:
         id:
           type: string
@@ -1265,7 +1301,9 @@ components:
           allOf:
             - $ref: '#/components/schemas/ImagingStudyServiceRequestDetail'
           nullable: true
-          description: Null when the ImagingStudy has no linked ServiceRequest
+          description: |
+            The linked ServiceRequest. Always present in the retrieve and PATCH responses,
+            because the imaging study is looked up through its service request
         studies:
           type: array
           description: |
@@ -1378,11 +1416,18 @@ components:
             type: string
           example: ["CT"]
         number_of_series:
-          type: number
+          type: integer
+          description: |
+            Number of series in the study, from the cached DCM4CHEE study details (cached for
+            an hour), so it may lag behind DCM4CHEE by up to that long
           example: 2
         number_of_instances:
-          type: number
-          example: 1
+          type: integer
+          description: |
+            Number of instances (images) across all series of the study, from the cached
+            DCM4CHEE study details (cached for an hour), so it may lag behind DCM4CHEE by up
+            to that long
+          example: 5
         study_series:
           type: array
           items:
@@ -1698,7 +1743,7 @@ components:
             detail: "You do not have permission to perform this action"
 
     NotFound:
-      description: Not Found
+      description: Not Found — an object referenced by the path, query or body (patient, encounter, service request, template and so on) does not exist
       content:
         application/json:
           schema:
