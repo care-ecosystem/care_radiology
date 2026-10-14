@@ -6,14 +6,14 @@ info:
     This plugin enables radiology workflows within CARE:
     - Upload DICOM files and link them to CARE service requests
     - Read imaging studies with their core service request, encounter, activity definition and diagnostic reports
-    - Serve a DICOM modality worklist and receive study/MPPS status webhooks from the
+    - Serve a DICOM modality worklist and receive MPPS status webhooks from the
       DICOM modality worklist server
-    - Manage per-facility observation templates used to structure diagnostic report
+    - Manage per-facility observation result templates used to structure diagnostic report
       observations
 
     **Authentication:**
     - Standard CARE endpoints use JWT Bearer auth (Authorization: Bearer <token>).
-    - DICOM worklist and webhook endpoints use a static API key
+    - DICOM worklist, external upload and webhook endpoints use a static API key
       (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
 
   version: 1.0.0
@@ -26,11 +26,11 @@ tags:
   - name: DICOM Studies
     description: Upload DICOM files, serve the modality worklist, and archive studies
   - name: Webhooks
-    description: Receive DICOM study and MPPS status notifications from the modality worklist server
+    description: Receive MPPS (Modality Performed Procedure Step) status notifications from the modality worklist server
   - name: Observation Result Templates
-    description: Manage per-facility reusable observation templates used to structure diagnostic report observations
+    description: Manage per-facility reusable observation result templates used to structure diagnostic report observations
   - name: Imaging Study
-    description: Read imaging studies (status, accession number) with their core service request, encounter, activity definition and diagnostic reports, and update their status
+    description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, and update their status
 
 security:
   - BearerAuth: []
@@ -139,7 +139,10 @@ paths:
         The study is then linked to its service request the same way `upload` does: the
         `ImagingStudy` is found by the file's Accession Number (0008,0050), among this
         patient's non-deleted service requests. A file with no readable accession number, or
-        one no `ImagingStudy` of this patient has, is uploaded unlinked.
+        one no `ImagingStudy` of this patient has, is uploaded unlinked: the request still
+        succeeds with `201` and `service_request_id` is absent from the response. An unlinked
+        study cannot be archived through the API (see the archive endpoint), so callers should
+        check for the absence of `service_request_id`.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -168,7 +171,10 @@ paths:
                     by the extension.
       responses:
         '201':
-          description: DICOM file uploaded and study record created/updated, and linked when the accession number matched
+          description: |
+            DICOM file uploaded and study record created/updated. It is linked to a service
+            request only when the accession number matched; otherwise `service_request_id` is
+            absent and the study is uploaded unlinked.
           content:
             application/json:
               schema:
@@ -246,7 +252,8 @@ paths:
         `ImagingStudy`. The study is then cached and returned.
 
         When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
-        must match `ImagingStudy.accession_number` of the service request.
+        must match `ImagingStudy.accession_number` of the service request. When it is off,
+        the accession number is not checked.
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: dicomUpload
@@ -296,9 +303,11 @@ paths:
                     description: ServiceRequest external_id the study was linked to
         '400':
           description: |
-            A required field is missing, the file is not a `.dcm` / `.dicom`, the service request
-            does not belong to the patient, or the file's accession number is unreadable, missing,
-            or does not match `ImagingStudy.accession_number`.
+            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
+            request does not belong to the patient. When
+            `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
+            file's accession number is unreadable, missing, or does not match
+            `ImagingStudy.accession_number`.
           content:
             application/json:
               schema:
@@ -319,6 +328,7 @@ paths:
                         msg:
                           file: ["Only .dcm and .dicom files are supported"]
                 accession_number_mismatch:
+                  summary: Only when CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER is on
                   value:
                     errors:
                       - type: "accession_number_mismatch"
@@ -367,9 +377,11 @@ paths:
         `archived_datetime`, and `archived_by`. The row is never deleted.
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
-        The study must already be linked to a service request (via `upload` or
-        `upload_dicom_external`) — archiving is rejected otherwise, since authorization is resolved through
-        `imaging_study.service_request.facility`. Requires
+        The study must already be linked to a service request (via `upload`, or via
+        `upload_dicom_external` when its accession number matched) — archiving is rejected
+        otherwise, since authorization is resolved through
+        `imaging_study.service_request.facility`. A study that `upload_dicom_external`
+        stored unlinked therefore cannot be archived through this API. Requires
         `can_write_radiology_data` permission on that facility.
 
         There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
@@ -461,7 +473,8 @@ paths:
             Payload failed validation against `WebhookMppsSpec` (missing/invalid
             `service_request_id` or `study_status`), or a business rule failed: the service
             request's facility is missing, or no `TagConfig.display` matches `study_status`
-            for that facility.
+            for that facility. A malformed JSON body (unparseable syntax) instead returns
+            DRF's default `{"detail": ...}` shape — see the `Error` schema.
           content:
             application/json:
               schema:
@@ -519,7 +532,8 @@ paths:
         Returns the `ImagingStudy` rows of an encounter, newest first, filtered on
         `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each has
         the encounter and service request from core base specs only; use the retrieve for the
-        full service request.
+        full service request. Archived DICOM studies are always left out of `studies[]` here;
+        `include_archived` is only supported on the retrieve.
         To fetch a single one by service request, use
         `GET /imaging_study/{serviceRequestId}/`.
 
@@ -544,7 +558,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing,'
+          description: '`encounter` is missing'
           content:
             application/json:
               schema:
@@ -577,8 +591,9 @@ paths:
       summary: Get an imaging study
       description: |
         Returns the `ImagingStudy` (status and accession number) linked to a CARE
-        `ServiceRequest`, with its `encounter` and core `service_request`, looked up by the
-        service request's own `external_id` — not the `ImagingStudy`'s own `id`.
+        `ServiceRequest`, with its `encounter`, core `service_request` and linked DICOM
+        `studies`, looked up by the service request's own `external_id` — not the
+        `ImagingStudy`'s own `id`.
 
         Requires `can_read_service_request` permission on the service request, plus
         `can_read_radiology_data` permission on its facility.
@@ -632,7 +647,9 @@ paths:
       description: |
         Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest`,
         looked up by the service request's own `external_id`, like the retrieve. Any status can
-        be set from any status. Returns the same body as the retrieve.
+        be set from any status. Returns the same body shape as the retrieve; archived DICOM
+        studies are left out of `studies[]` because this operation does not accept
+        `include_archived`.
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: updateImagingStudyStatus
@@ -694,9 +711,9 @@ paths:
       description: |
         Returns observation result templates for a facility. `facility` is required.
         Optionally filter by `observation_definition`, `activity_definition`,
-        or `title` (case-insensitive contains).
+        `created_by`, or `title` (case-insensitive contains).
 
-        Requires `can_read_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_read_radiology_observation_result_template` permission for the facility.
       operationId: listObservationTemplates
       parameters:
         - name: facility
@@ -720,7 +737,7 @@ paths:
             format: uuid
         - name: created_by
           in: query
-          description: Filter by Created by Users external_id
+          description: Filter by the external_id of the user who created the template
           schema:
             type: string
             format: uuid
@@ -734,7 +751,7 @@ paths:
         - $ref: '#/components/parameters/Offset'
       responses:
         '200':
-          description: Paginated list of observation templates
+          description: Paginated list of observation result templates
           content:
             application/json:
               schema:
@@ -760,11 +777,10 @@ paths:
         - Observation Result Templates
       summary: Create observation result template
       description: |
-        Creates a new observation template for a facility, with a set of fields
-        (code/value/description) replacing any existing fields. `title` must be
-        unique per facility.
+        Creates a new observation result template for a facility, with a set of fields
+        (code/value/description). `title` must be unique per facility.
 
-        Requires `can_write_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_write_radiology_observation_result_template` permission for the facility.
       operationId: createObservationTemplate
       requestBody:
         required: true
@@ -784,7 +800,7 @@ paths:
                   description: "Radiologist impression"
       responses:
         '201':
-          description: Observation template created
+          description: Observation result template created
           content:
             application/json:
               schema:
@@ -802,10 +818,10 @@ paths:
         - Observation Result Templates
       summary: Update observation result template
       description: |
-        Partially updates `title` and/or `description` of an existing observation
+        Partially updates `title` and/or `description` of an existing observation result
         template. Fields (code/value/description) cannot be changed via update.
 
-        Requires `can_write_radiology_observation_result_template` permission for the facility (shares the same permission slug as core diagnostic reports).
+        Requires `can_write_radiology_observation_result_template` permission for the facility.
       operationId: updateObservationTemplate
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -817,7 +833,7 @@ paths:
               $ref: '#/components/schemas/ObservationTemplateUpdate'
       responses:
         '200':
-          description: Observation template updated
+          description: Observation result template updated
           content:
             application/json:
               schema:
@@ -868,7 +884,7 @@ components:
     IncludeArchived:
       name: include_archived
       in: query
-      description: Include archived DICOM studies in `studies[]`
+      description: Include archived DICOM studies in `studies[]` (supported on the retrieve only)
       schema:
         type: boolean
         default: false
@@ -1127,8 +1143,8 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are left out unless
-            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            DCM4CHEE (cached for an hour). Archived studies are always left out of the list
+            response. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -1181,11 +1197,11 @@ components:
           nullable: true
         diagnostic_reports:
           type: array
-          items: 
-            allOf:
-              - $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
-            nullable: true
-            description: The service request's newest DiagnosticReport; null when it has none
+          description: |
+            The service request's newest DiagnosticReport, returned as a list of at most one
+            item. The list is empty when the service request has no DiagnosticReport.
+          items:
+            $ref: '#/components/schemas/ImagingStudyDiagnosticReport'
 
     ImagingStudy:
       type: object
@@ -1224,7 +1240,8 @@ components:
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
             DCM4CHEE (cached for an hour). Archived studies are left out unless
-            `include_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            `include_archived=true` is passed to the retrieve; the PATCH response always leaves
+            them out. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -1465,7 +1482,7 @@ components:
             type: integer
           description: Full tags array on the ServiceRequest after this update
 
-    # ===================== Observation Template =====================
+    # ===================== Observation Result Template =====================
     ObservationTemplateField:
       type: object
       required:
@@ -1513,7 +1530,7 @@ components:
         fields:
           type: array
           minItems: 1
-          description: At least one field is required; replaces all existing fields on create
+          description: At least one field is required
           items:
             $ref: '#/components/schemas/ObservationTemplateField'
 
@@ -1577,9 +1594,9 @@ components:
     ErrorEnvelope:
       type: object
       description: |
-        Envelope produced by core CARE's `emr_exception_handler`. Used by every endpoint in
-        this plugin for `Http404`, DRF `ValidationError` and pydantic `ValidationError`.
-        `403` / `401` fall through to DRF's default `{"detail": ...}`.
+        Envelope produced by core CARE's `emr_exception_handler`. Used for `Http404`, DRF
+        `ValidationError` and pydantic `ValidationError`. `401` / `403` fall through to DRF's
+        default `{"detail": ...}`.
       properties:
         errors:
           type: array
@@ -1605,8 +1622,9 @@ components:
     Error:
       type: object
       description: |
-        DRF's default body, used only for `401` and `403`, which bypass
-        `emr_exception_handler`. Everything else uses `ErrorEnvelope`.
+        DRF's default body. Used for `401` and `403`, which bypass `emr_exception_handler`,
+        and for errors raised as a plain DRF `APIException` (such as a malformed JSON body or
+        the MPPS webhook's `500`). Every other error uses `ErrorEnvelope`.
       properties:
         detail:
           type: string
