@@ -17,9 +17,9 @@ router = DefaultRouter() if settings.DEBUG else SimpleRouter()
 
 router.register("dicom", DicomViewSet, basename="radiology_dicom")
 router.register(
-    "observation_template",
+    "observation_result_template",
     ObservationTemplateViewSet,
-    basename="radiology_observation_template",
+    basename="radiology_observation_result_template",
 )
 router.register(
     r"facility/(?P<facility_external_id>[^/.]+)/external",

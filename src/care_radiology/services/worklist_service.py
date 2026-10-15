@@ -1,26 +1,21 @@
 import logging
+from collections import defaultdict
 
 from django.db.models import OuterRef, Q, Subquery
 
 from care.emr.models.device import Device
+from care.emr.models.location import FacilityLocation
 from care.emr.models.service_request import ServiceRequest
+from care.emr.resources.device.spec import DeviceAvailabilityStatusChoices, DeviceStatusChoices
+from care_radiology.api.specs.external import WorklistDeviceSpec, WorklistLocationSpec
 from care_radiology.models.imaging_study import ImagingStudy
 from care_radiology.utils.patient import get_patient_uhid
 
 logger = logging.getLogger(__name__)
 
 
-def get_service_requests(
-    *,
-    from_date=None,
-    to_date=None,
-    modality=None,
-    facility=None,
-):
-    filters = Q(status="active", deleted=False)
-
-    if facility:
-        filters &= Q(facility=facility)
+def get_service_requests(*, facility, from_date=None, to_date=None, modality=None):
+    filters = Q(facility=facility, status="active", deleted=False)
 
     if modality:
         device_location_ids = Device.objects.filter(registered_name__iexact=modality).values_list(
@@ -39,12 +34,12 @@ def get_service_requests(
         modality,
         from_date,
         to_date,
-        facility.external_id if facility else None,
+        facility.external_id,
     )
 
     return (
         ServiceRequest.objects.filter(filters)
-        .select_related("patient", "facility", "activity_definition", "created_by")
+        .select_related("patient", "facility", "activity_definition")
         .annotate(
             accession_number=Subquery(
                 ImagingStudy.objects.filter(service_request=OuterRef("pk")).values("accession_number")[:1]
@@ -54,54 +49,64 @@ def get_service_requests(
     )
 
 
-def worklist_entry(sr, modality=None):
-    name = None
-    body_site = None
-    description = None
-    procedure_id = None
-    created_by = None
-    patient_uhid = None
+def worklist_entries(service_requests, modality=None):
+    location_ids = {
+        location_id
+        for sr in service_requests
+        for location_id in (sr.activity_definition.locations if sr.activity_definition else [])
+    }
 
-    if sr.activity_definition is not None:
-        name = sr.activity_definition.title
-        if sr.activity_definition.body_site is not None:
-            body_site = sr.activity_definition.body_site.get("display")
-        if sr.activity_definition.code is not None:
-            description = sr.activity_definition.code.get("display")
-            procedure_id = sr.activity_definition.code.get("code")
+    devices = Device.objects.filter(
+        current_location_id__in=location_ids,
+        status=DeviceStatusChoices.active,
+        availability_status=DeviceAvailabilityStatusChoices.available,
+    ).order_by("registered_name", "id")
+    if modality:
+        devices = devices.filter(registered_name__iexact=modality)
+    devices_by_location = defaultdict(list)
+    for device in devices:
+        devices_by_location[device.current_location_id].append(WorklistDeviceSpec.serialize(device).to_json())
 
-    if sr.created_by is not None:
-        created_by = {
-            "prefix": sr.created_by.prefix,
-            "first_name": sr.created_by.first_name,
-            "last_name": sr.created_by.last_name,
-        }
+    locations = {
+        location.id: WorklistLocationSpec.serialize(location, devices=devices_by_location[location.id]).to_json()
+        for location in FacilityLocation.objects.filter(id__in=location_ids)
+    }
+    return [
+        worklist_entry(
+            sr,
+            locations=[
+                locations[i]
+                for i in (sr.activity_definition.locations if sr.activity_definition else [])
+                if i in locations
+            ],
+        )
+        for sr in service_requests
+    ]
 
-    if sr.patient is not None:
-        patient_uhid = get_patient_uhid(sr.patient)
 
+def worklist_entry(sr, locations=()):
+    ad = sr.activity_definition
+    code = (ad.code or {}) if ad else {}
     return {
         "service_request": {
             "id": sr.external_id,
-            "name": name,
-            "date": sr.created_date,
-            "meta": sr.meta,
-            "accession_number": sr.accession_number,
-            "body_site": body_site,
-            "description": description,
-            "modality": modality,
-            "procedure_id": procedure_id,
-            "created_by": created_by,
+            "name": ad.title if ad else None,
+            "description": code.get("display"),
+            "body_site": ad.body_site.get("display") if ad and ad.body_site else None,
+            "procedure_id": code.get("code"),
             "priority": sr.priority,
             "technician_instruction": sr.note,
             "patient_instruction": sr.patient_instruction,
+            "date": sr.created_date,
+            "accession_number": sr.accession_number,
         },
+        "locations": list(locations),
         "facility": {"id": sr.facility.external_id, "name": sr.facility.name},
         "patient": {
             "id": sr.patient.external_id,
             "name": sr.patient.name,
             "gender": sr.patient.gender,
             "age": sr.patient.age,
-            "patient_uhid": patient_uhid,
+            "patient_uhid": get_patient_uhid(sr.patient),
         },
     }
