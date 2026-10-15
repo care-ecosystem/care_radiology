@@ -22,11 +22,18 @@ from care_radiology.api.specs.imaging_study import (
     ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
 )
-from care_radiology.api.viewsets.dicom import handle_dicom_upload, validate_accession_number
+from care_radiology.api.viewsets.mixins import DicomUploadMixin
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy
-from care_radiology.services.dicom_service import PacsDeleteError, archive_study, fetch_studies
+from care_radiology.services.dicom_service import (
+    PacsDeleteError,
+    archive_study,
+    fetch_studies,
+    imaging_study_for_encounter,
+    imaging_study_for_service_request,
+    validate_accession_number,
+)
 from care_radiology.settings import plugin_settings
 
 logger = logging.getLogger(__name__)
@@ -37,7 +44,7 @@ class ImagingStudyFilters(filters.FilterSet):
 
 
 @extend_schema(tags=["Radiology: Imaging Study"])
-class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet):
+class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet):
     database_model = ImagingStudy
     pydantic_read_model = ImagingStudyReadSpec
     pydantic_retrieve_model = ImagingStudyRetrieveSpec
@@ -89,7 +96,7 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
         queryset = (
             super()
             .get_queryset()
-            .filter(Q(service_request__isnull=True) | Q(service_request__deleted=False), encounter__patient=patient)
+            .filter(Q(service_request__isnull=True) | Q(service_request__deleted=False), patient=patient)
             .select_related("encounter", "service_request__facility")
             .prefetch_related(Prefetch("studies", queryset=studies))
         )
@@ -148,23 +155,25 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
 
         if not service_request_id:
             self.authorize_write_radiology_data(encounter.facility)
-            return handle_dicom_upload(patient, dcm_file, encounter=encounter, user=request.user)
+            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dcm_file, user=request.user)
 
         service_request = get_object_or_404(
-            ServiceRequest.objects.select_related("facility"), external_id=service_request_id, patient=patient
+            ServiceRequest.objects.select_related("facility", "imaging_study"),
+            external_id=service_request_id,
+            patient=patient,
         )
         if service_request.encounter_id != encounter.id:
             raise ValidationError({"service_request_id": "Service request does not belong to this encounter"})
         self.authorize_write_radiology_data(service_request.facility)
 
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
-            error_response = validate_accession_number(dcm_file, service_request)
-            if error_response is not None:
-                return error_response
+            validate_accession_number(dcm_file, service_request)
         else:
             logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 
-        return handle_dicom_upload(patient, dcm_file, service_request=service_request, user=request.user)
+        return self.handle_dicom_upload(
+            imaging_study_for_service_request(service_request), dcm_file, user=request.user
+        )
 
     @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
     @action(detail=False, methods=["post"], url_path=r"(?P<study_id>[^/.]+)/archive")
@@ -174,13 +183,11 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
                 "imaging_study__service_request__facility", "imaging_study__encounter__facility"
             ),
             external_id=study_id,
-            patient=self.get_patient(),
+            imaging_study__patient=self.get_patient(),
             is_archived=False,
         )
         request_data = DicomStudyArchiveSpec(**request.data)
         imaging_study = study.imaging_study
-        if imaging_study is None:
-            raise ValidationError({"detail": "Cannot archive a study that is not linked to an imaging study"})
         if imaging_study.service_request:
             self.authorize_write_radiology_data(imaging_study.service_request.facility)
         else:

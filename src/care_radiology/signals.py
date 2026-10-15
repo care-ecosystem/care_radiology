@@ -20,7 +20,10 @@ def on_service_request_save(sender, instance, created, **kwargs):
     service_request_id = instance.id
 
     if created and instance.encounter_id:
-        ImagingStudy.objects.get_or_create(service_request=instance, defaults={"encounter_id": instance.encounter_id})
+        ImagingStudy.objects.get_or_create(
+            service_request=instance,
+            defaults={"encounter_id": instance.encounter_id, "patient_id": instance.patient_id},
+        )
         transaction.on_commit(
             lambda: assign_accession_number.delay(service_request_id=service_request_id)
         )
