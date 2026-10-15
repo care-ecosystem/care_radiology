@@ -444,13 +444,8 @@ def fetch_study(dicom_study):
 
     study_date_raw = first(study, DICOM_TAG.StudyDate.value)
     study_time_raw = first(study, DICOM_TAG.StudyTime.value)
-
-    if study_date_raw and study_time_raw:
-        study_date = d_datetime_to_iso(study_date_raw, study_time_raw)
-    elif study_date_raw:
-        study_date = d_datetime_to_iso(study_date_raw)
-    else:
-        study_date = None
+    study_tz_offset_raw = first(study, DICOM_TAG.TimezoneOffsetFromUTC.value)
+    study_date = d_datetime_to_iso(study_date_raw, study_time_raw, study_tz_offset_raw)
 
     cachable = {
         "study_uid": study_uid,

@@ -241,7 +241,7 @@ class DicomViewSet(ViewSet):
 
         return self._handle_dicom_upload(patient, dcm_file)
 
-    # Link an alr_authorize_read_radiology_dataeady-uploaded study to a service request, called once all files for
+    # Link an already-uploaded study to a service request, called once all files for
     # a study have finished uploading via `upload`/`upload-dicom-external`.
     @extend_schema(request=DicomStudyLinkSpec)
     @action(detail=False, methods=["post"], url_path="link-service-request")
