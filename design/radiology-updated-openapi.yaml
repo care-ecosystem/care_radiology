@@ -87,18 +87,20 @@ paths:
           schema:
             type: string
             example: "CT"
-        - name: from
+        - name: created_date_after
           in: query
           description: Start date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
           schema:
             type: string
             example: "2026-06-01"
-        - name: to
+        - name: created_date_before
           in: query
           description: End date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
           schema:
             type: string
             example: "2026-06-12"
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Worklist results
@@ -107,6 +109,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  count:
+                    type: integer
+                    description: Total number of records matching the query
                   status:
                     type: string
                     example: "success"
@@ -161,13 +166,8 @@ paths:
             schema:
               type: object
               required:
-                - patient_id
                 - file
               properties:
-                patient_id:
-                  type: string
-                  format: uuid
-                  description: Patient external_id
                 file:
                   type: string
                   format: binary
@@ -555,7 +555,6 @@ paths:
               type: object
               required:
                 - encounter_id
-                - service_request_id
                 - file
               properties:
                 encounter_id:
