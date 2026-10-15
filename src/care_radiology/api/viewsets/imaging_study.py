@@ -170,16 +170,21 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
     @action(detail=False, methods=["post"], url_path=r"(?P<study_id>[^/.]+)/archive")
     def archive(self, request, *args, study_id=None, **kwargs):
         study = get_object_or_404(
-            DicomStudy.objects.select_related("imaging_study__service_request__facility"),
+            DicomStudy.objects.select_related(
+                "imaging_study__service_request__facility", "imaging_study__encounter__facility"
+            ),
             external_id=study_id,
             patient=self.get_patient(),
             is_archived=False,
         )
         request_data = DicomStudyArchiveSpec(**request.data)
-        service_request = study.imaging_study.service_request if study.imaging_study else None
-        if service_request is None:
-            raise ValidationError({"detail": "Cannot archive a study that is not linked to a service request"})
-        self.authorize_write_radiology_data(service_request.facility)
+        imaging_study = study.imaging_study
+        if imaging_study is None:
+            raise ValidationError({"detail": "Cannot archive a study that is not linked to an imaging study"})
+        if imaging_study.service_request:
+            self.authorize_write_radiology_data(imaging_study.service_request.facility)
+        else:
+            self.authorize_write_radiology_data(imaging_study.encounter.facility)
 
         try:
             archive_study(study, request_data.archive_reason, archived_by=request.user)
