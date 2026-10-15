@@ -1181,11 +1181,24 @@ components:
         id:
           type: string
           format: uuid
-          description: Device external_id
-        registered_name:
+          description: location external_id
+        name:
           type: string
           nullable: true
           example: "CT"
+        devices:
+          type: array
+          items:
+            type: object
+            properties: 
+                id:
+                  type: string
+                  format: uuid
+                  description: Device external_id
+                name:
+                  type: string
+                  nullable: true
+                  example: "CT IMX001"
 
     # ===================== Imaging Study =====================
     ImagingStudyListItem:
