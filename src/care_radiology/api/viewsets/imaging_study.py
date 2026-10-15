@@ -25,7 +25,7 @@ from care_radiology.api.specs.imaging_study import (
 from care_radiology.api.viewsets.mixins import DicomUploadMixin
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.imaging_study import ImagingStudy
+from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.services.dicom_service import (
     PacsDeleteError,
     archive_study,
@@ -168,14 +168,22 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             raise ValidationError({"service_request_id": "Service request does not belong to this encounter"})
         self.authorize_write_radiology_data(service_request.facility)
 
+        imaging_study = imaging_study_for_service_request(service_request)
+        if imaging_study.status == ImagingStudyStatus.CANCELLED:
+            raise ValidationError(
+                {
+                    "errors": [
+                        {"type": "imaging_study_cancelled", "msg": "The service request's imaging study is cancelled"}
+                    ]
+                }
+            )
+
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
             validate_accession_number(dcm_file, service_request)
         else:
             logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 
-        return self.handle_dicom_upload(
-            imaging_study_for_service_request(service_request), dcm_file, user=request.user
-        )
+        return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
 
     @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
     @action(detail=False, methods=["post"], url_path=r"(?P<study_id>[^/.]+)/archive")
