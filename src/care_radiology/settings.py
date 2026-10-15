@@ -146,7 +146,6 @@ DEFAULTS = {
     "CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT": 600,  # Read timeout for STOW-RS uploads (seconds, 10 minutes)
     "CARE_RADIOLOGY_PACS_QUERY_TIMEOUT": 60,  # Read timeout for QIDO-RS queries (seconds, 1 minute)
     # Static API key rate limits (django-ratelimit rate strings, per source IP)
-    "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STUDY": "150/m",
     "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS": "200/m",
     "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST": "100/m",
     "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL": "2000/m",

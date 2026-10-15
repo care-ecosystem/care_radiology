@@ -8,10 +8,9 @@ from rest_framework.permissions import BasePermission
 from care_radiology.settings import plugin_settings
 
 _RATE_LIMIT_SETTING_BY_URL_NAME = {
-    "radiology_webhooks-study": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STUDY",
-    "radiology_webhooks-status": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS",
-    "radiology_dicom-worklist": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST",
-    "radiology_dicom-upload-dicom-external": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL",
+    "radiology_external-worklist": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST",
+    "radiology_external-upload": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL",
+    "radiology_external-update-status": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS",
 }
 
 
@@ -27,6 +26,10 @@ class StaticAPIKeyAuthentication(BaseAuthentication):
         if api_key == plugin_settings.CARE_RADIOLOGY_WEBHOOK_SECRET:
             return (AnonymousUser(), None)
         raise AuthenticationFailed("Invalid API key")
+
+    def authenticate_header(self, request):
+        # A value here makes DRF answer a failed authentication with 401 instead of 403.
+        return "Api-Key"
 
 
 class StaticAPIKeyAuthorization(BasePermission):

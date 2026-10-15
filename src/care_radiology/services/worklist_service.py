@@ -1,9 +1,9 @@
 import logging
 
-from care.emr.models.device import Device
-from care.emr.models.service_request import ServiceRequest
 from django.db.models import OuterRef, Q, Subquery
 
+from care.emr.models.device import Device
+from care.emr.models.service_request import ServiceRequest
 from care_radiology.models.imaging_study import ImagingStudy
 from care_radiology.utils.patient import get_patient_uhid
 
@@ -16,7 +16,6 @@ def get_service_requests(
     to_date=None,
     modality=None,
     facility=None,
-    limit=1000,
 ):
     filters = Q(status="active", deleted=False)
 
@@ -43,69 +42,66 @@ def get_service_requests(
         facility.external_id if facility else None,
     )
 
-    qs = (
+    return (
         ServiceRequest.objects.filter(filters)
         .select_related("patient", "facility", "activity_definition", "created_by")
         .annotate(
             accession_number=Subquery(
                 ImagingStudy.objects.filter(service_request=OuterRef("pk")).values("accession_number")[:1]
             )
-        )[:limit]
+        )
+        .order_by("-created_date")
     )
 
-    results = []
-    for sr in qs:
-        name = None
-        body_site = None
-        description = None
-        procedure_id = None
-        created_by = None
-        patient_uhid = None
 
-        if sr.activity_definition is not None:
-            name = sr.activity_definition.title
-            if sr.activity_definition.body_site is not None:
-                body_site = sr.activity_definition.body_site.get("display")
-            if sr.activity_definition.code is not None:
-                description = sr.activity_definition.code.get("display")
-                procedure_id = sr.activity_definition.code.get("code")
+def worklist_entry(sr, modality=None):
+    name = None
+    body_site = None
+    description = None
+    procedure_id = None
+    created_by = None
+    patient_uhid = None
 
-        if sr.created_by is not None:
-            created_by = {
-                "prefix": sr.created_by.prefix,
-                "first_name": sr.created_by.first_name,
-                "last_name": sr.created_by.last_name,
-            }
+    if sr.activity_definition is not None:
+        name = sr.activity_definition.title
+        if sr.activity_definition.body_site is not None:
+            body_site = sr.activity_definition.body_site.get("display")
+        if sr.activity_definition.code is not None:
+            description = sr.activity_definition.code.get("display")
+            procedure_id = sr.activity_definition.code.get("code")
 
-        if sr.patient is not None:
-            patient_uhid = get_patient_uhid(sr.patient)
+    if sr.created_by is not None:
+        created_by = {
+            "prefix": sr.created_by.prefix,
+            "first_name": sr.created_by.first_name,
+            "last_name": sr.created_by.last_name,
+        }
 
-        results.append(
-            {
-                "service_request": {
-                    "id": sr.external_id,
-                    "name": name,
-                    "date": sr.created_date,
-                    "meta": sr.meta,
-                    "accession_number": sr.accession_number,
-                    "body_site": body_site,
-                    "description": description,
-                    "modality": modality,
-                    "procedure_id": procedure_id,
-                    "created_by": created_by,
-                    "priority": sr.priority,
-                    "technician_instruction": sr.note,
-                    "patient_instruction": sr.patient_instruction,
-                },
-                "facility": {"id": sr.facility.external_id, "name": sr.facility.name},
-                "patient": {
-                    "id": sr.patient.external_id,
-                    "name": sr.patient.name,
-                    "gender": sr.patient.gender,
-                    "age": sr.patient.age,
-                    "patient_uhid": patient_uhid,
-                },
-            }
-        )
+    if sr.patient is not None:
+        patient_uhid = get_patient_uhid(sr.patient)
 
-    return results
+    return {
+        "service_request": {
+            "id": sr.external_id,
+            "name": name,
+            "date": sr.created_date,
+            "meta": sr.meta,
+            "accession_number": sr.accession_number,
+            "body_site": body_site,
+            "description": description,
+            "modality": modality,
+            "procedure_id": procedure_id,
+            "created_by": created_by,
+            "priority": sr.priority,
+            "technician_instruction": sr.note,
+            "patient_instruction": sr.patient_instruction,
+        },
+        "facility": {"id": sr.facility.external_id, "name": sr.facility.name},
+        "patient": {
+            "id": sr.patient.external_id,
+            "name": sr.patient.name,
+            "gender": sr.patient.gender,
+            "age": sr.patient.age,
+            "patient_uhid": patient_uhid,
+        },
+    }
