@@ -1113,6 +1113,25 @@ components:
             name:
               type: string
               description: Name of the activity/procedure
+            description:
+              type: string
+              description: Name of the activity/procedure
+            body_site:
+              type: string
+              description: Name of the activity/procedure
+            procedure_id:
+              type: string
+              description: Name of the activity/procedure
+
+            priority:
+              type: string
+              description: Name of the activity/procedure
+            technician_instruction:
+              type: string
+              description: Name of the activity/procedure   
+            patient_instruction:
+              type: string
+              description: Name of the activity/procedure                            
             date:
               type: string
               format: date-time
@@ -1121,13 +1140,13 @@ components:
               nullable: true
               description: From ImagingStudy.accession_number
               example: "ACJAYCTO26000004"
-        devices:
+        locations:
           type: array
           description: |
-            Devices whose current_location is one of the service request's
-            activity_definition.locations, narrowed to the `modality` query param when given
+            activities whose current_location is one of the service request's
+            activity_definition.locations
           items:
-            $ref: '#/components/schemas/WorklistDevice'
+            $ref: '#/components/schemas/locations'
         facility:
           type: object
           properties:
@@ -1151,8 +1170,12 @@ components:
             age:
               type: integer
               nullable: true
+            patient_uhid:
+              type: string
+              format: string
+              description: Patient UHID
 
-    WorklistDevice:
+    locations:
       type: object
       properties:
         id:
@@ -1163,18 +1186,6 @@ components:
           type: string
           nullable: true
           example: "CT"
-        user_friendly_name:
-          type: string
-          nullable: true
-        current_location:
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-              description: FacilityLocation external_id
-            name:
-              type: string
 
     # ===================== Imaging Study =====================
     ImagingStudyListItem:
