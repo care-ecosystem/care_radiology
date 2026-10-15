@@ -22,7 +22,7 @@ from care_radiology.services.dicom_service import (
     process_mpps_webhook,
     read_file_accession_number,
 )
-from care_radiology.services.worklist_service import get_service_requests, worklist_entry
+from care_radiology.services.worklist_service import get_service_requests, worklist_entries
 from care_radiology.utils.dicom import parse_date
 
 
@@ -54,7 +54,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             data={
                 "count": paginator.count,
                 "status": "success",
-                "results": [worklist_entry(sr, modality=query.modality) for sr in page],
+                "results": worklist_entries(page, modality=query.modality),
             },
             status=status.HTTP_200_OK,
         )
