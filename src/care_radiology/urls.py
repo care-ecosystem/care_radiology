@@ -4,8 +4,8 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter, SimpleRouter
 
 from care_radiology.api.viewsets.dicom import DicomViewSet
+from care_radiology.api.viewsets.imaging_study import ImagingStudyViewSet
 from care_radiology.api.viewsets.observation_template import ObservationTemplateViewSet
-from care_radiology.api.viewsets.radiology_service_request import RadiologyServiceRequestViewSet
 from care_radiology.api.viewsets.webhooks import WebhookViewSet
 
 
@@ -24,7 +24,7 @@ router.register(
 )
 router.register(
     "radiology_service_request",
-    RadiologyServiceRequestViewSet,
+    ImagingStudyViewSet,
     basename="radiology_service_request",
 )
 

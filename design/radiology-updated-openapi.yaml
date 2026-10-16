@@ -482,7 +482,7 @@ paths:
         Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest` of the patient,
         looked up by the service request's own `external_id`, like the retrieve. Any status can
         be set from any status. Returns the same body as the retrieve with its default, so
-        `studies[]` includes archived studies.
+        `studies[]` leaves out archived studies.
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: updateImagingStudyStatus
@@ -596,7 +596,8 @@ paths:
             or service request does not belong to the patient. When
             `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
             file's accession number is unreadable, missing, or does not match
-            `ImagingStudy.accession_number`.
+            `ImagingStudy.accession_number`, or the service request has no `ImagingStudy`
+            (`imaging_study_missing`).
           content:
             application/json:
               schema:
@@ -948,11 +949,11 @@ components:
       name: include_archived
       in: query
       description: |
-        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `true`, so the
-        retrieve returns all studies; `false` leaves the archived ones out.
+        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `false`, so the
+        retrieve leaves the archived ones out; `true` includes them.
       schema:
         type: boolean
-        default: true
+        default: false
     Limit:
       name: limit
       in: query
@@ -1333,9 +1334,9 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are included unless
-            `include_archived=false` is passed to the retrieve; the PATCH response always includes
-            them. A study DCM4CHEE cannot return, or whose details fail to
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true` is passed to the retrieve; the PATCH response also leaves them
+            out. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -1451,10 +1452,14 @@ components:
             type: string
           example: ["CT"]
         number_of_series:
-          type: number
+          type: integer
+          nullable: true
+          description: Number of series. Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 2
         number_of_instances:
-          type: number
+          type: integer
+          nullable: true
+          description: Sum of the series' instance counts (images). Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 1
         study_series:
           type: array
@@ -1503,16 +1508,13 @@ components:
           example: ["CT"]
         number_of_series:
           type: integer
-          description: |
-            Number of series in the study, from the cached DCM4CHEE study details (cached for
-            an hour), so it may lag behind DCM4CHEE by up to that long
+          nullable: true
+          description: Number of series. Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 2
         number_of_instances:
           type: integer
-          description: |
-            Number of instances (images) across all series of the study, from the cached
-            DCM4CHEE study details (cached for an hour), so it may lag behind DCM4CHEE by up
-            to that long
+          nullable: true
+          description: Sum of the series' instance counts (images). Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 5
         study_series:
           type: array

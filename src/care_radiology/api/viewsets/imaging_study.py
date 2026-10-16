@@ -3,14 +3,14 @@ from care.security.authorization.base import AuthorizationController
 from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema
 
-from care_radiology.api.specs.radiology_service_request import RadiologyServiceRequestReadSpec
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care_radiology.api.specs.imaging_study import ImagingStudyReadSpec
+from care_radiology.models.imaging_study import ImagingStudy
 
 
 @extend_schema(tags=["Radiology: Service Request"])
-class RadiologyServiceRequestViewSet(EMRRetrieveMixin, EMRBaseViewSet):
-    database_model = RadiologyServiceRequest
-    pydantic_retrieve_model = RadiologyServiceRequestReadSpec
+class ImagingStudyViewSet(EMRRetrieveMixin, EMRBaseViewSet):
+    database_model = ImagingStudy
+    pydantic_retrieve_model = ImagingStudyReadSpec
     lookup_field = "service_request__external_id"
 
     def authorize_retrieve(self, model_instance):
