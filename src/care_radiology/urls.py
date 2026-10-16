@@ -23,9 +23,9 @@ router.register(
     basename="radiology_observation_template",
 )
 router.register(
-    "radiology_service_request",
+    r"patient/(?P<patient_external_id>[^/.]+)/imaging_study",
     ImagingStudyViewSet,
-    basename="radiology_service_request",
+    basename="imaging_study",
 )
 
 urlpatterns = [

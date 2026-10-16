@@ -1,15 +1,5 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from care.emr.api.viewsets.base import emr_exception_handler
-from care.emr.models.diagnostic_report import DiagnosticReport
-from care.emr.models.encounter import Encounter
-from care.emr.models.patient import Patient
-from care.emr.models.service_request import ServiceRequest
-from care.emr.resources.service_request.spec import ServiceRequestStatusChoices
-from care.facility.models import Facility
-from care.security.authorization.base import AuthorizationController
-from care.utils.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
@@ -17,12 +7,16 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
+from care.emr.api.viewsets.base import emr_exception_handler
+from care.emr.models.patient import Patient
+from care.emr.models.service_request import ServiceRequest
+from care.facility.models import Facility
+from care.security.authorization.base import AuthorizationController
+from care.utils.shortcuts import get_object_or_404
 from care_radiology.api.specs.dicom import (
-    DicomStudiesQuerySpec,
     DicomStudyArchiveSpec,
     DicomStudyArchiveStateSpec,
     DicomStudyLinkSpec,
-    DicomStudyUserSpec,
     DicomWorklistQuerySpec,
 )
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
@@ -38,7 +32,6 @@ from care_radiology.services.dicom_service import (
     WebhookConflictError,
     archive_study,
     ensure_study_linked_to_service_request,
-    fetch_study,
     link_service_request_to_study,
     upload_dicom_file,
 )
@@ -53,10 +46,6 @@ logger = logging.getLogger(__name__)
 class DicomViewSet(ViewSet):
     def get_exception_handler(self):
         return emr_exception_handler
-
-    def _authorize_read_radiology_data(self, facility):
-        if not AuthorizationController.call("can_read_radiology_data", self.request.user, facility):
-            raise PermissionDenied("You do not have permission to read radiology data for this facility")
 
     def _authorize_write_radiology_data(self, facility):
         if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
@@ -277,54 +266,11 @@ class DicomViewSet(ViewSet):
             status=status.HTTP_200_OK,
         )
 
-    def _studies_for_encounter(self, encounter_external_id, include_archived):
-        encounter = get_object_or_404(Encounter, external_id=encounter_external_id)
-
-        if not AuthorizationController.call("can_view_encounter_obj", self.request.user, encounter):
-            raise PermissionDenied("You do not have permission to view this encounter")
-        self._authorize_read_radiology_data(encounter.facility)
-
-        qs = DicomStudy.objects.filter(
-            imaging_study__service_request__encounter=encounter,
-            imaging_study__service_request__deleted=False,
-            imaging_study__service_request__status__in=[
-                ServiceRequestStatusChoices.active.value,
-                ServiceRequestStatusChoices.completed.value,
-            ],
-            deleted=False,
-            dicom_study_uid__isnull=False,
-        ).select_related(
-            "imaging_study__service_request", "created_by", "updated_by", "archived_by"
-        )
-        if not include_archived:
-            qs = qs.filter(is_archived=False)
-        return list(qs)
-
-    def _studies_for_service_request(self, service_request_external_id, include_archived):
-        service_request = get_object_or_404(ServiceRequest, external_id=service_request_external_id)
-
-        if not AuthorizationController.call("can_read_service_request", self.request.user, service_request):
-            raise PermissionDenied("You do not have permission to view this service request")
-        self._authorize_read_radiology_data(service_request.facility)
-
-        qs = DicomStudy.objects.filter(
-            imaging_study__service_request=service_request,
-            deleted=False,
-            dicom_study_uid__isnull=False,
-        ).select_related(
-            "imaging_study__service_request", "created_by", "updated_by", "archived_by"
-        )
-        if not include_archived:
-            qs = qs.filter(is_archived=False)
-        return list(qs)
-
     @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
     @action(detail=True, methods=["post"], url_path="archive")
     def archive(self, request, pk=None):
         study = get_object_or_404(
-            DicomStudy.objects.select_related(
-                "imaging_study__service_request__facility", "created_by", "updated_by"
-            ),
+            DicomStudy.objects.select_related("imaging_study__service_request__facility"),
             external_id=pk,
         )
         request_data = DicomStudyArchiveSpec(**request.data)
@@ -339,53 +285,3 @@ class DicomViewSet(ViewSet):
                 status=e.status_code,
             )
         return Response(DicomStudyArchiveStateSpec.serialize(study).to_json(), status=status.HTTP_200_OK)
-
-    @action(detail=False, methods=["get"], url_path="studies")
-    def get_studies(self, request):
-        query = DicomStudiesQuerySpec(**request.query_params.dict())
-
-        if query.service_request_id:
-            studies = self._studies_for_service_request(query.service_request_id, query.include_archived)
-        else:
-            studies = self._studies_for_encounter(query.encounter_id, query.include_archived)
-
-        service_request_ids = {
-            study.imaging_study.service_request_id
-            for study in studies
-            if study.imaging_study and study.imaging_study.service_request_id
-        }
-        latest_report_id_by_sr_id = {
-            row["service_request_id"]: row["external_id"]
-            for row in DiagnosticReport.objects.filter(service_request_id__in=service_request_ids, deleted=False)
-            .order_by("service_request_id", "-created_date")
-            .distinct("service_request_id")
-            .values("service_request_id", "external_id")
-        }
-
-        results = []
-        with ThreadPoolExecutor(max_workers=min(10, len(studies) or 1)) as executor:
-            future_to_study = {executor.submit(fetch_study, study): study for study in studies}
-            for future in as_completed(future_to_study):
-                result = future.result()
-                if result is not None:
-                    study = future_to_study[future]
-                    result["is_archived"] = study.is_archived
-                    result["archive_reason"] = study.archive_reason
-                    result["archived_datetime"] = study.archived_datetime
-                    for field in ("created_by", "updated_by", "archived_by"):
-                        user = getattr(study, field)
-                        result[field] = DicomStudyUserSpec.serialize(user).to_json() if user else None
-
-                    sr = study.imaging_study.service_request if study.imaging_study else None
-                    if sr:
-                        dr_id = latest_report_id_by_sr_id.get(sr.id)
-                        result["service_request"] = {
-                            "id": str(sr.external_id),
-                            "diagnostic_report_id": str(dr_id) if dr_id else None,
-                        }
-                    else:
-                        result["service_request"] = None
-
-                    results.append(result)
-
-        return Response(results, status=status.HTTP_200_OK)

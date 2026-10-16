@@ -368,7 +368,7 @@ paths:
       summary: List imaging studies for an encounter
       description: |
         Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
-        on `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each
+        on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed. Each
         has the encounter and service request from core base specs only; use the retrieve for
         the full service request. Archived DICOM studies are always left out of `studies[]`
         here; `include_archived` is only supported on the retrieve.
