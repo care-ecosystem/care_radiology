@@ -46,6 +46,9 @@ Table radiology_dicomstudy {
   archived_datetime TIMESTAMP [null, note: 'When the study was archived']
   archived_by_id INTEGER [null, note: 'FK to care_user.id - who archived. ON DELETE PROTECT']
 
+  number_of_series INTEGER [null, note: 'Number of series; saved at each upload from DCM4CHEE, only ever raised, kept after archive. Null until known']
+  number_of_instances INTEGER [null, note: 'Sum of the series instance counts; saved at each upload from DCM4CHEE, only ever raised, kept after archive. Null until known']
+
   created_date TIMESTAMP [not null, note: "indexed"]
   modified_date TIMESTAMP [not null, note: "indexed"]
   deleted BOOLEAN [default: false, note: "indexed"]
