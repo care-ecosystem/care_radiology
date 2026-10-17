@@ -303,12 +303,11 @@ def validate_accession_number(dcm_file, service_request):
         )
 
 
-def imaging_study_for_accession_number(accession_number, patient, facility):
-    """Returns the newest non-cancelled imaging study of the patient in the facility with this accession number."""
+def imaging_study_for_accession_number(accession_number, facility):
+    """Returns the newest non-cancelled imaging study in the facility with this accession number."""
     imaging_study = (
         ImagingStudy.objects.filter(
             accession_number=accession_number,
-            patient=patient,
             service_request__facility=facility,
             service_request__deleted=False,
         )
@@ -320,7 +319,7 @@ def imaging_study_for_accession_number(accession_number, patient, facility):
     if imaging_study is None:
         raise _accession_error(
             "accession_number_unmatched",
-            "No imaging study of this patient in the facility has the file's accession number",
+            "No imaging study in the facility has the file's accession number",
         )
     return imaging_study
 

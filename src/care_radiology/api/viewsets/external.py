@@ -6,7 +6,6 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
 from care.emr.api.viewsets.base import emr_exception_handler
-from care.emr.models.patient import Patient
 from care.facility.models import Facility
 from care.utils.pagination.care_pagination import CareLimitOffsetPagination
 from care.utils.shortcuts import get_object_or_404
@@ -63,22 +62,13 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     def upload(self, request, *args, **kwargs):
         facility = self.get_facility()
         dcm_file = request.FILES.get("file")
-        patient_id = request.data.get("patient_id")
-
-        errors = {}
         if not dcm_file:
-            errors["file"] = "This value is required"
-        if not patient_id:
-            errors["patient_id"] = "This value is required"
-        if errors:
-            raise ValidationError(errors)
-
-        patient = get_object_or_404(Patient, external_id=patient_id)
+            raise ValidationError({"file": "This value is required"})
 
         # The file is linked by its accession number, so one that cannot be linked is
         # rejected before it reaches the PACS.
         accession_number = read_file_accession_number(dcm_file)
-        imaging_study = imaging_study_for_accession_number(accession_number, patient, facility)
+        imaging_study = imaging_study_for_accession_number(accession_number, facility)
         return self.handle_dicom_upload(imaging_study, dcm_file)
 
     # MPPS status update, mapped to a ServiceRequest tag.
