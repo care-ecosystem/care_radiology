@@ -1057,8 +1057,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
@@ -1456,8 +1457,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
@@ -1511,8 +1513,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
