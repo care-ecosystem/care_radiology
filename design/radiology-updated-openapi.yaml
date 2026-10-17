@@ -689,12 +689,13 @@ paths:
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
         `study_id` is the `id` of an entry in an imaging study's `studies[]`. The study must
-        already be linked to a service request (via the imaging study `upload`, or via
-        the external upload (`dicomUploadExternal`) when its accession number matched) — archiving is rejected
-        otherwise, since authorization is resolved through
-        `imaging_study.service_request.facility`. A study that the external upload
-        stored unlinked therefore cannot be archived through this API. Requires
-        `can_write_radiology_data` permission on that facility.
+        be linked to an imaging study: a service request's (via the imaging study `upload` with
+        `service_request_id`, or the external upload (`dicomUploadExternal`)), or the encounter's
+        imaging study without a service request (via the imaging study `upload` without
+        `service_request_id`). Archiving is rejected otherwise. Authorization is resolved
+        through `imaging_study.service_request.facility`, or `imaging_study.encounter.facility`
+        when the imaging study has no service request. Requires `can_write_radiology_data`
+        permission on that facility.
 
         There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
         archive actions.
@@ -717,7 +718,7 @@ paths:
         '400':
           description: |
             Payload failed validation against `DicomStudyArchiveSpec` (missing/empty
-            `archive_reason`), or the study is not linked to a service request.
+            `archive_reason`), or the study is not linked to an imaging study.
           content:
             application/json:
               schema:
@@ -734,7 +735,7 @@ paths:
                     errors:
                       - type: "validation_error"
                         msg:
-                          detail: "Cannot archive a study that is not linked to a service request"
+                          detail: "Cannot archive a study that is not linked to an imaging study"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

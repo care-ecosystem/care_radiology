@@ -2,7 +2,7 @@ import datetime
 
 from pydantic import UUID4, BaseModel, Field
 
-from care.emr.resources.base import EMRResource, cacheable, model_from_cache
+from care.emr.resources.base import EMRResource
 from care.users.models import User
 from care_radiology.models.dicom_study import DicomStudy
 
@@ -11,7 +11,6 @@ class DicomStudyArchiveSpec(BaseModel):
     archive_reason: str = Field(min_length=1)
 
 
-@cacheable(use_base_manager=True)
 class DicomStudyUserSpec(EMRResource):
     __model__ = User
 
@@ -21,10 +20,6 @@ class DicomStudyUserSpec(EMRResource):
     first_name: str
     last_name: str
     suffix: str | None = None
-
-    @classmethod
-    def perform_extra_serialization(cls, mapping, obj):
-        mapping["id"] = str(obj.external_id)
 
 
 class DicomStudyBaseSpec(EMRResource):
@@ -39,10 +34,10 @@ class DicomStudyBaseSpec(EMRResource):
     def perform_extra_serialization(cls, mapping, obj, *args, **kwargs):
         super().perform_extra_serialization(mapping, obj)
         mapping["study_uid"] = obj.dicom_study_uid
-        if obj.created_by_id:
-            mapping["created_by"] = model_from_cache(DicomStudyUserSpec, id=obj.created_by_id)
-        if obj.updated_by_id:
-            mapping["updated_by"] = model_from_cache(DicomStudyUserSpec, id=obj.updated_by_id)
+        if obj.created_by:
+            mapping["created_by"] = DicomStudyUserSpec.serialize(obj.created_by).to_json()
+        if obj.updated_by:
+            mapping["updated_by"] = DicomStudyUserSpec.serialize(obj.updated_by).to_json()
 
 
 class DicomStudyReadSpec(DicomStudyBaseSpec):
@@ -69,8 +64,8 @@ class DicomStudyArchiveStateSpec(DicomStudyBaseSpec):
     @classmethod
     def perform_extra_serialization(cls, mapping, obj, *args, **kwargs):
         super().perform_extra_serialization(mapping, obj)
-        if obj.archived_by_id:
-            mapping["archived_by"] = model_from_cache(DicomStudyUserSpec, id=obj.archived_by_id)
+        if obj.archived_by:
+            mapping["archived_by"] = DicomStudyUserSpec.serialize(obj.archived_by).to_json()
 
 
 class DicomStudyRetrieveSpec(DicomStudyReadSpec, DicomStudyArchiveStateSpec):

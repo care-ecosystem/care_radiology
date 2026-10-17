@@ -82,8 +82,10 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
             if value not in ("true", "false"):
                 raise ValidationError({"include_archived": "Must be true or false"})
             include_archived = value == "true"
-        studies = DicomStudy.objects.order_by("-created_date")
-        if not include_archived:
+        studies = DicomStudy.objects.select_related("created_by", "updated_by").order_by("-created_date")
+        if include_archived:
+            studies = studies.select_related("archived_by")
+        else:
             studies = studies.filter(is_archived=False)
 
         queryset = (
@@ -171,7 +173,9 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
     def archive(self, request, *args, study_id=None, **kwargs):
         study = get_object_or_404(
             DicomStudy.objects.select_related(
-                "imaging_study__service_request__facility", "imaging_study__encounter__facility"
+                "imaging_study__service_request__facility",
+                "imaging_study__encounter__facility",
+                "created_by",
             ),
             external_id=study_id,
             patient=self.get_patient(),
