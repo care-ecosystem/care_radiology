@@ -1,7 +1,7 @@
-from care.emr.models import EMRBaseModel
-from care.emr.models.patient import Patient
 from django.db import models
 
+from care.emr.models import EMRBaseModel
+from care.emr.models.patient import Patient
 from care_radiology.models.imaging_study import ImagingStudy
 
 
@@ -25,6 +25,8 @@ class DicomStudy(EMRBaseModel):
         blank=True,
         related_name="archived_dicom_studies",
     )
+    number_of_series = models.PositiveIntegerField(null=True, blank=True)
+    number_of_instances = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         constraints = [

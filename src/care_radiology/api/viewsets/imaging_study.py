@@ -1,23 +1,35 @@
+import logging
+
 from django.db.models import Prefetch, Q
 from django_filters import rest_framework as filters
 from drf_spectacular.utils import extend_schema
+from rest_framework import status
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.response import Response
 
 from care.emr.api.viewsets.base import EMRBaseViewSet, EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin
 from care.emr.models.diagnostic_report import DiagnosticReport
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
+from care.emr.models.service_request import ServiceRequest
 from care.emr.resources.service_request.spec import ServiceRequestStatusChoices
 from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
+from care_radiology.api.specs.dicom import DicomStudyArchiveSpec, DicomStudyArchiveStateSpec
 from care_radiology.api.specs.imaging_study import (
     ImagingStudyReadSpec,
     ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
 )
+from care_radiology.api.viewsets.dicom import handle_dicom_upload, validate_accession_number
+from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy
-from care_radiology.services.dicom_service import fetch_studies
+from care_radiology.services.dicom_service import PacsDeleteError, archive_study, fetch_studies
+from care_radiology.settings import plugin_settings
+
+logger = logging.getLogger(__name__)
 
 
 class ImagingStudyFilters(filters.FilterSet):
@@ -34,6 +46,13 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
     filterset_class = ImagingStudyFilters
     filter_backends = [filters.DjangoFilterBackend]
 
+    def get_patient(self):
+        return get_object_or_404(Patient, external_id=self.kwargs["patient_external_id"])
+
+    def authorize_write_radiology_data(self, facility):
+        if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to write radiology data for this facility")
+
     def authorize_retrieve(self, model_instance):
         service_request = model_instance.service_request
         if not AuthorizationController.call("can_read_service_request", self.request.user, service_request):
@@ -43,10 +62,7 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
 
     def authorize_update(self, request_obj, model_instance):
         self.authorize_retrieve(model_instance)
-        if not AuthorizationController.call(
-            "can_write_radiology_data", self.request.user, model_instance.service_request.facility
-        ):
-            raise PermissionDenied("You do not have permission to write radiology data for this facility")
+        self.authorize_write_radiology_data(model_instance.service_request.facility)
 
     def list(self, request, *args, **kwargs):
         # The PACS details of every study on the page are fetched in one parallel pool.
@@ -58,7 +74,7 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
         )
 
     def get_queryset(self):
-        patient = get_object_or_404(Patient, external_id=self.kwargs["patient_external_id"])
+        patient = self.get_patient()
 
         include_archived = False
         if self.action == "retrieve":
@@ -66,8 +82,10 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
             if value not in ("true", "false"):
                 raise ValidationError({"include_archived": "Must be true or false"})
             include_archived = value == "true"
-        studies = DicomStudy.objects.order_by("-created_date")
-        if not include_archived:
+        studies = DicomStudy.objects.select_related("created_by", "updated_by").order_by("-created_date")
+        if include_archived:
+            studies = studies.select_related("archived_by")
+        else:
             studies = studies.filter(is_archived=False)
 
         queryset = (
@@ -108,3 +126,75 @@ class ImagingStudyViewSet(EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBas
                 queryset=DiagnosticReport.objects.order_by("-created_date"),
             )
         )
+
+    @action(detail=False, methods=["post"])
+    def upload(self, request, *args, **kwargs):
+        patient = self.get_patient()
+        encounter_id = request.data.get("encounter_id")
+        service_request_id = request.data.get("service_request_id")
+        dcm_file = request.FILES.get("file")
+
+        errors = {}
+        if not encounter_id:
+            errors["encounter_id"] = "This value is required"
+        if not dcm_file:
+            errors["file"] = "This value is required"
+        elif not dcm_file.name.lower().endswith(DICOM_FILE_EXTENSIONS):
+            errors["file"] = "Only .dcm and .dicom files are supported"
+        if errors:
+            raise ValidationError(errors)
+
+        encounter = get_object_or_404(
+            Encounter.objects.select_related("facility"), external_id=encounter_id, patient=patient
+        )
+
+        if not service_request_id:
+            self.authorize_write_radiology_data(encounter.facility)
+            return handle_dicom_upload(patient, dcm_file, encounter=encounter, user=request.user)
+
+        service_request = get_object_or_404(
+            ServiceRequest.objects.select_related("facility"), external_id=service_request_id, patient=patient
+        )
+        if service_request.encounter_id != encounter.id:
+            raise ValidationError({"service_request_id": "Service request does not belong to this encounter"})
+        self.authorize_write_radiology_data(service_request.facility)
+
+        if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
+            error_response = validate_accession_number(dcm_file, service_request)
+            if error_response is not None:
+                return error_response
+        else:
+            logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
+
+        return handle_dicom_upload(patient, dcm_file, service_request=service_request, user=request.user)
+
+    @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
+    @action(detail=False, methods=["post"], url_path=r"(?P<study_id>[^/.]+)/archive")
+    def archive(self, request, *args, study_id=None, **kwargs):
+        study = get_object_or_404(
+            DicomStudy.objects.select_related(
+                "imaging_study__service_request__facility",
+                "imaging_study__encounter__facility",
+                "created_by",
+            ),
+            external_id=study_id,
+            patient=self.get_patient(),
+            is_archived=False,
+        )
+        request_data = DicomStudyArchiveSpec(**request.data)
+        imaging_study = study.imaging_study
+        if imaging_study is None:
+            raise ValidationError({"detail": "Cannot archive a study that is not linked to an imaging study"})
+        if imaging_study.service_request:
+            self.authorize_write_radiology_data(imaging_study.service_request.facility)
+        else:
+            self.authorize_write_radiology_data(imaging_study.encounter.facility)
+
+        try:
+            archive_study(study, request_data.archive_reason, archived_by=request.user)
+        except PacsDeleteError as e:
+            return Response(
+                data={"errors": [{"type": "pacs_delete_error", "msg": e.message, **e.extra}]},
+                status=e.status_code,
+            )
+        return Response(DicomStudyArchiveStateSpec.serialize(study).to_json(), status=status.HTTP_200_OK)
