@@ -70,10 +70,3 @@ class DicomStudyArchiveStateSpec(DicomStudyBaseSpec):
 
 class DicomStudyRetrieveSpec(DicomStudyReadSpec, DicomStudyArchiveStateSpec):
     pass
-
-
-class DicomWorklistQuerySpec(BaseModel):
-    modality: str | None = None
-    from_date: str | None = Field(None, alias="from")
-    to_date: str | None = Field(None, alias="to")
-    facility_id: UUID4 = Field(alias="facility")

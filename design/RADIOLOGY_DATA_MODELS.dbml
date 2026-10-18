@@ -10,6 +10,7 @@ Table radiology_imagingstudy {
   external_id UUID [unique, not null, note: 'Exposed via API as id']
   service_request_id INTEGER [null, unique, note: 'FK to emr.ServiceRequest.id (1:1, nullable). ON DELETE CASCADE']
   encounter_id INTEGER [not null, note: 'FK to emr.Encounter.id. ON DELETE CASCADE']
+  patient_id INTEGER [not null, note: 'FK to emr.Patient.id, the patient of its encounter. ON DELETE CASCADE']
 
   accession_number VARCHAR(100) [null, note: 'Accession number of the service request (its only copy)']
   status VARCHAR(20) [not null, default: 'ACTIVE', note: 'ACTIVE, IN_PROGRESS, COMPLETED, or CANCELLED']
@@ -21,6 +22,7 @@ Table radiology_imagingstudy {
   indexes {
     service_request_id
     encounter_id
+    patient_id
     deleted
     accession_number
   }
@@ -28,18 +30,18 @@ Table radiology_imagingstudy {
 
 Ref service_request_fk: radiology_imagingstudy.service_request_id ?> emr_servicerequest.id
 Ref imaging_study_encounter: radiology_imagingstudy.encounter_id ?> emr_encounter.id
+Ref imaging_study_patient: radiology_imagingstudy.patient_id ?> emr_patient.id
 
 // ============================================================================
 // DICOM STUDY - DICOM Study Records (N:1 relationship)
-// Represents a single DICOM study linked to a patient and service request
+// Represents a single DICOM study under an imaging study, whose patient it belongs to
 // ============================================================================
 Table radiology_dicomstudy {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
-  patient_id INTEGER [not null, note: 'FK to emr.Patient.id. ON DELETE CASCADE']
-  imaging_study_id INTEGER [null, note: 'FK to radiology_imagingstudy.id. ON DELETE CASCADE']
+  imaging_study_id INTEGER [not null, note: 'FK to radiology_imagingstudy.id. ON DELETE CASCADE']
 
-  dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per patient among non-archived studies']
+  dicom_study_uid VARCHAR(500) [not null, note: 'DICOM Study Instance UID - unique per imaging study among non-archived studies; uploads also reject one held by another patient']
 
   is_archived BOOLEAN [default: false, note: 'Soft-hide flag, set via the archive action']
   archive_reason TEXT [not null, default: '', note: 'Reason supplied when archived']
@@ -60,14 +62,12 @@ Table radiology_dicomstudy {
   meta JSON [default: 'null', null, note: 'Arbitrary metadata']
 
   indexes {
-    patient_id
     imaging_study_id
     deleted
-    (patient_id, dicom_study_uid) [unique, note: 'Unique per patient among non-archived studies (partial constraint, condition is_archived = false)']
+    (imaging_study_id, dicom_study_uid) [unique, note: 'unique_imaging_study_active_study_uid: unique per imaging study among non-archived studies (partial constraint, condition is_archived = false)']
   }
 }
 
-Ref dicom_study_patient: radiology_dicomstudy.patient_id ?> emr_patient.id
 Ref dicom_study_imaging_study: radiology_dicomstudy.imaging_study_id ?> radiology_imagingstudy.id
 Ref dicom_study_created_by: radiology_dicomstudy.created_by_id ?> care_user.id
 Ref dicom_study_updated_by: radiology_dicomstudy.updated_by_id ?> care_user.id
@@ -75,13 +75,13 @@ Ref dicom_study_archived_by: radiology_dicomstudy.archived_by_id ?> care_user.id
 
 // ============================================================================
 // RADIOLOGY WEBHOOK LOGS - Webhook Event Logging
-// Audit trail for DICOM/radiology webhook events
+// Audit trail of MPPS status payloads received from the modality worklist server
 // ============================================================================
 Table radiology_webhook_logs {
   id INTEGER [pk, increment]
   external_id UUID [unique, not null, note: 'Exposed via API as id']
 
-  type VARCHAR(50) [not null, note: 'Webhook event type']
+  type VARCHAR(50) [not null, note: 'MPPS (older rows may hold SR-STUDY-INSERT, from the removed study webhook)']
   raw_data JSON [not null, note: 'Raw webhook payload received']
 
   created_date TIMESTAMP [not null, note: "indexed"]
