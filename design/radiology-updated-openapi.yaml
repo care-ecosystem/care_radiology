@@ -69,13 +69,15 @@ paths:
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
         DICOM modality worklist. Authenticated with static API key
-        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by modality device
-        name or date range.
+        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by location name
+        (`modality`) or date range.
 
-        Each entry carries the `accession_number` from `ImagingStudy`, and the
-        `devices` whose `current_location` is one of the service request's
-        `activity_definition.locations` (narrowed to `modality` when given). Devices are
-        fetched in one query for the whole worklist.
+        Each entry carries the `accession_number` from `ImagingStudy`, and the `locations` of the
+        service request's `activity_definition.locations`, each with the `devices` whose
+        `current_location` it is. With `modality`, only requests that include a location of that
+        name are returned, and each lists only that location, with all its devices: every device
+        in a location shares the same worklist. Devices are fetched in one query for the whole
+        worklist.
       operationId: dicomWorklist
       security:
         - StaticApiKey: []
@@ -83,10 +85,12 @@ paths:
         - $ref: '#/components/parameters/FacilityId'
         - name: modality
           in: query
-          description: Filter by modality device registered_name (case-insensitive)
+          description: |
+            Filter by location name (case-insensitive): only service requests whose
+            `activity_definition.locations` include a location of the facility with this name
           schema:
             type: string
-            example: "CT"
+            example: "CT Room 1"
         - name: created_date_after
           in: query
           description: Start date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)

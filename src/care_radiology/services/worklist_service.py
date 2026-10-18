@@ -18,10 +18,10 @@ def get_service_requests(*, facility, from_date=None, to_date=None, modality=Non
     filters = Q(facility=facility, status="active", deleted=False)
 
     if modality:
-        device_location_ids = Device.objects.filter(registered_name__iexact=modality).values_list(
-            "current_location_id", flat=True
+        location_ids = FacilityLocation.objects.filter(facility=facility, name__iexact=modality).values_list(
+            "id", flat=True
         )
-        filters &= Q(activity_definition__locations__overlap=device_location_ids)
+        filters &= Q(activity_definition__locations__overlap=location_ids)
 
     if from_date:
         filters &= Q(created_date__gte=from_date)
@@ -56,20 +56,23 @@ def worklist_entries(service_requests, modality=None):
         for location_id in (sr.activity_definition.locations if sr.activity_definition else [])
     }
 
+    location_objects = FacilityLocation.objects.filter(id__in=location_ids)
+    if modality:
+        location_objects = location_objects.filter(name__iexact=modality)
+    location_objects = list(location_objects)
+
     devices = Device.objects.filter(
-        current_location_id__in=location_ids,
+        current_location__in=location_objects,
         status=DeviceStatusChoices.active,
         availability_status=DeviceAvailabilityStatusChoices.available,
     ).order_by("registered_name", "id")
-    if modality:
-        devices = devices.filter(registered_name__iexact=modality)
     devices_by_location = defaultdict(list)
     for device in devices:
         devices_by_location[device.current_location_id].append(WorklistDeviceSpec.serialize(device).to_json())
 
     locations = {
         location.id: WorklistLocationSpec.serialize(location, devices=devices_by_location[location.id]).to_json()
-        for location in FacilityLocation.objects.filter(id__in=location_ids)
+        for location in location_objects
     }
     return [
         worklist_entry(
