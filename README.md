@@ -157,7 +157,7 @@ Machine-to-machine endpoints for the modality worklist server and other integrat
 
 | Endpoint | Purpose | Rate-limit setting (default) |
 | --- | --- | --- |
-| `GET facility/{facility_id}/external/worklist/` | Active service requests of the facility, newest first. Filters: `modality`, `created_date_after`, `created_date_before`. Paginated with `limit` / `offset` (default 14, max 200) and returns `count`. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST` (`100/m`) |
+| `GET facility/{facility_id}/external/worklist/` | Active service requests of the facility, newest first, each with its activity definition's locations and the active, available devices at each. Filters: `modality`, `created_date_after`, `created_date_before`. Paginated with `limit` / `offset` (default 14, max 200) and returns `count`. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST` (`100/m`) |
 | `POST facility/{facility_id}/external/imaging_study/upload/` | Uploads a DICOM file (`file` only) and links it by its Accession Number to the newest non-cancelled imaging study in the facility, whose patient the study then belongs to. A file whose accession number is unreadable, missing, or matches no imaging study is rejected (`400`) before it reaches the PACS. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL` (`2000/m`) |
 | `PATCH facility/{facility_id}/external/imaging_study/status/` | MPPS status update: adds the matching facility tag to the service request, and moves its imaging study to `IN_PROGRESS` (`SCAN_STARTED`) or `CANCELLED` (`DISCONTINUED`). | `CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS` (`200/m`) |
 
