@@ -68,7 +68,6 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             raise PermissionDenied("You do not have permission to read radiology data for this facility")
 
     def authorize_update(self, request_obj, model_instance):
-        self.authorize_retrieve(model_instance)
         self.authorize_write_radiology_data(model_instance.service_request.facility)
 
     def list(self, request, *args, **kwargs):
