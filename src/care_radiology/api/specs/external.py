@@ -1,4 +1,6 @@
-from pydantic import UUID4, BaseModel, Field
+from typing import Literal
+
+from pydantic import UUID4, BaseModel
 
 from care.emr.models.device import Device
 from care.emr.models.location import FacilityLocation
@@ -38,4 +40,4 @@ class DicomWorklistQuerySpec(BaseModel):
 
 class WebhookMppsSpec(BaseModel):
     service_request_id: UUID4
-    study_status: str = Field(min_length=1)
+    study_status: Literal["IN_PROGRESS", "COMPLETED", "CANCELLED"]

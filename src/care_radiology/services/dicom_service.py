@@ -18,10 +18,8 @@ from care_radiology.constants import (
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
     DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
-    MPPS_STATUS_DISCONTINUED,
-    MPPS_STATUS_SCAN_STARTED,
+    MPPS_TAG_DISPLAY_BY_STATUS,
     PACS_DELETE_REJECTION_CODE,
-    VALID_MPPS_STATUSES,
 )
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
@@ -339,27 +337,33 @@ def imaging_study_for_encounter(encounter):
 
 
 def process_mpps_webhook(facility, service_request_id, study_status):
-    if study_status not in VALID_MPPS_STATUSES:
-        logger.warning("[MPPS] Unexpected status: %s", study_status)
-
+    """
+    Sets the service request's imaging study to `study_status`, then adds the facility tag whose
+    display is the status's MPPS status (Scan Started, Scan Completed or Scan Cancelled) to the
+    service request, when the facility has one. An imaging study already COMPLETED or CANCELLED
+    keeps its status.
+    """
+    tag_display = MPPS_TAG_DISPLAY_BY_STATUS[study_status]
     with transaction.atomic():
         service_request = get_object_or_404(
             ServiceRequest.objects.select_for_update(), external_id=service_request_id, facility=facility
         )
+        imaging_study = get_object_or_404(ImagingStudy.objects.select_for_update(), service_request=service_request)
+
+        if imaging_study.status not in [ImagingStudyStatus.COMPLETED, ImagingStudyStatus.CANCELLED]:
+            imaging_study.status = study_status
+            imaging_study.save(update_fields=["status", "modified_date"])
 
         try:
-            tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
+            tag_config = TagConfig.objects.filter(facility=facility, display=tag_display).first()
         except Exception as e:
             logger.exception("[MPPS] Error fetching tag")
             raise APIException("Error fetching tag configuration") from e
 
-        if not tag_config:
-            logger.error("[MPPS] Tag not found for status: %s", study_status)
-            raise ValidationError({"study_status": f"Tag configuration not found for status: {study_status}"})
-        logger.info("[MPPS] Tag found: %s", tag_config.external_id)
-
         tags = service_request.tags or []
-        if tag_config.id in tags:
+        if not tag_config:
+            logger.info("[MPPS] No tag configured for %s, skipping tag update", tag_display)
+        elif tag_config.id in tags:
             logger.warning(
                 "[MPPS] Tag %s already exists in SR %s, skipping duplicate",
                 tag_config.id,
@@ -371,36 +375,22 @@ def process_mpps_webhook(facility, service_request_id, study_status):
                 "study_status": study_status,
                 "tag_id": tag_config.id,
             }
-
-        try:
-            tags.append(tag_config.id)
-            service_request.tags = tags
-            service_request.save(update_fields=["tags"])
-        except Exception as e:
-            logger.exception("[MPPS] Error updating tags")
-            raise APIException("Error updating tags") from e
-
-        if study_status == MPPS_STATUS_SCAN_STARTED:
-            imaging_study_status = ImagingStudyStatus.IN_PROGRESS
-        elif study_status == MPPS_STATUS_DISCONTINUED:
-            imaging_study_status = ImagingStudyStatus.CANCELLED
         else:
-            imaging_study_status = None
-
-        if imaging_study_status:
-            ImagingStudy.objects.filter(service_request=service_request).exclude(
-                status__in=[ImagingStudyStatus.COMPLETED, ImagingStudyStatus.CANCELLED]
-            ).update(status=imaging_study_status, modified_date=timezone.now())
-
-    logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
-    logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
+            try:
+                tags.append(tag_config.id)
+                service_request.tags = tags
+                service_request.save(update_fields=["tags"])
+            except Exception as e:
+                logger.exception("[MPPS] Error updating tags")
+                raise APIException("Error updating tags") from e
+            logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
 
     return {
-        "detail": "MPPS status tag updated successfully",
+        "detail": "MPPS status processed successfully",
         "service_request_id": str(service_request.external_id),
         "study_status": study_status,
-        "tag_id": tag_config.id,
-        "tag_uuid": str(tag_config.external_id),
+        "tag_id": tag_config.id if tag_config else None,
+        "tag_uuid": str(tag_config.external_id) if tag_config else None,
         "current_tags": tags,
     }
 
