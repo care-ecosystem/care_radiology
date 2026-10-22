@@ -71,7 +71,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         imaging_study = imaging_study_for_accession_number(accession_number, facility)
         return self.handle_dicom_upload(imaging_study, dcm_file)
 
-    # MPPS status update, mapped to a ServiceRequest tag.
+    # MPPS status update, mapped to an imaging study status and, optionally, a ServiceRequest tag.
     @extend_schema(request=WebhookMppsSpec)
     @action(detail=False, methods=["patch"], url_path="imaging_study/status")
     def update_status(self, request, *args, **kwargs):

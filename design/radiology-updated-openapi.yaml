@@ -272,14 +272,23 @@ paths:
       description: |
         Webhook endpoint called by the DICOM worklist server with Modality Performed
         Procedure Step (MPPS) status updates for a service request of the facility given in
-        the path. Maps `study_status` to a facility `TagConfig` entry and appends it to
-        `ServiceRequest.tags` (duplicates are skipped). Authenticated with static API key.
-        All payloads are persisted to `RadiologyWebhookLogs` with `type="MPPS"`.
+        the path. Authenticated with static API key. All payloads are persisted to
+        `RadiologyWebhookLogs` with `type="MPPS"`.
 
-        `study_status` is expected to be one of `SCAN_STARTED`, `SCAN_COMPLETED`,
-        `DISCONTINUED` (an unrecognized value is still processed, just logged as a
-        warning) and must match a `TagConfig.display` value configured for the
-        service request's facility.
+        `study_status` updates the service request's imaging study status, and optionally
+        its tags:
+        - Imaging study: `SCAN_STARTED` → `IN_PROGRESS`, `SCAN_COMPLETED` → `COMPLETED`,
+          `DISCONTINUED` → `CANCELLED`. An imaging study already `COMPLETED` or
+          `CANCELLED` is left unchanged.
+        - Tag (optional): if a facility `TagConfig.display` matches `study_status`, it is
+          appended to `ServiceRequest.tags`. With no matching tag, only the imaging study
+          is updated.
+        - If the matching tag is already on the service request, the status was processed
+          before and nothing is updated.
+
+        An unrecognized `study_status` is logged as a warning and still processed if a
+        matching tag exists; one with neither an imaging study mapping nor a matching tag
+        is rejected with `400`.
       operationId: webhookStatus
       security:
         - StaticApiKey: []
@@ -296,7 +305,7 @@ paths:
               study_status: "SCAN_STARTED"
       responses:
         '200':
-          description: Tag updated successfully, or already present
+          description: Status processed, or tag already present
           content:
             application/json:
               schema:
@@ -305,8 +314,8 @@ paths:
           description: |
             Payload failed validation against `WebhookMppsSpec` (missing/invalid
             `service_request_id` or `study_status`), or a business rule failed: the service
-            request's facility is missing, or no `TagConfig.display` matches `study_status`
-            for that facility. A malformed JSON body (unparseable syntax) instead returns
+            request's facility is missing, or `study_status` maps to no imaging study status
+            and no `TagConfig.display` of that facility matches it. A malformed JSON body (unparseable syntax) instead returns
             DRF's default `{"detail": ...}` shape — see the `Error` schema.
           content:
             application/json:
@@ -319,12 +328,12 @@ paths:
                       - type: "missing"
                         loc: ["study_status"]
                         msg: "Field required"
-                tag_not_found:
+                nothing_to_update:
                   value:
                     errors:
                       - type: "validation_error"
                         msg:
-                          study_status: "Tag configuration not found for status: SCAN_STARTED"
+                          study_status: "Status maps to no imaging study status or tag configuration"
                 facility_not_found:
                   value:
                     errors:
@@ -334,7 +343,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: Facility or ServiceRequest not found
+          description: Facility, ServiceRequest or its ImagingStudy not found
           content:
             application/json:
               schema:
@@ -1648,8 +1657,9 @@ components:
           type: string
           description: |
             MPPS status value. Expected to be one of SCAN_STARTED, SCAN_COMPLETED,
-            DISCONTINUED, but other values are still processed (with a warning logged),
-            as long as a matching facility TagConfig.display exists.
+            DISCONTINUED, which update the imaging study status. Other values are still
+            processed (with a warning logged), as long as a matching facility
+            TagConfig.display exists.
           example: "SCAN_STARTED"
 
     WebhookStatusResponse:
@@ -1657,19 +1667,27 @@ components:
       properties:
         detail:
           type: string
-          example: "MPPS status tag updated successfully"
+          example: "MPPS status processed successfully"
         service_request_id:
           type: string
           format: uuid
         study_status:
           type: string
+        imaging_study_status:
+          type: string
+          enum: [ACTIVE, IN_PROGRESS, COMPLETED, CANCELLED]
+          description: The imaging study's status after this update.
         tag_id:
           type: integer
-          description: Internal TagConfig id (matches an entry in ServiceRequest.tags)
+          nullable: true
+          description: |
+            Internal TagConfig id (matches an entry in ServiceRequest.tags), or null when
+            no facility tag matches `study_status`.
         tag_uuid:
           type: string
           format: uuid
-          description: TagConfig external_id
+          nullable: true
+          description: TagConfig external_id, or null when no facility tag matches
         current_tags:
           type: array
           items:
