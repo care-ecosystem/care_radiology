@@ -36,7 +36,7 @@ care_radiology_plugin = Plug(
     configs={
         # Base URL for dcm4che DICOMweb API
         "CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL": "http://arc:8080/dcm4chee-arc/aets/DCM4CHEE",
-        # Secret used to verify incoming webhooks
+        # Static API key for the external APIs (worklist, external upload, MPPS status)
         "CARE_RADIOLOGY_WEBHOOK_SECRET": "RADOMSECRET"
     },
 )
@@ -128,18 +128,18 @@ The plugin validates DICOM uploads and study links before accepting them. Each c
 | Setting | Default | What it validates |
 | --- | --- | --- |
 | `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE` | `False` | Before uploading, searches the PACS for the file's SOP Instance UID and rejects the upload (`409`) if it is already stored, or if the same file is being uploaded concurrently. The `409` is returned by the plugin; the file is not sent to the PACS. |
-| `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) to the `upload` endpoint whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's accession number. `upload-dicom-external` has no service request and is not checked. |
-| `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different service request. Applies to uploads, the `link-service-request` endpoint and the study webhook. |
+| `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` | `True` | Rejects an upload (`400`) to `patient/{patient_id}/imaging_study/upload/` with a `service_request_id` whose Accession Number (0008,0050) is unreadable, missing, or does not match the service request's imaging study accession number. The external upload always reads the accession number, whatever this setting is, because it links the file by it (see External APIs). |
+| `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR` | `True` | Rejects linking a study (`409`) that is already linked to a different imaging study of the same patient. A study already linked to another patient is rejected whatever this setting is. Applies to both uploads. |
 
 When a check is disabled, a warning is logged for each request that skips it. Disabling a check has these effects:
 
 - `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`: the file is sent to the PACS even if it is already stored. dcm4chee silently discards a duplicate SOP Instance UID and still reports success.
 - `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER`: a file is accepted for a service request whatever accession number it carries.
-- `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR`: the study is moved to the new service request. The previous service request is not updated and keeps its `COMPLETED` status.
+- `CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR`: a study already held by another imaging study of the same patient is added to the new one as well, as a second record; the other imaging study keeps its record. A study held by another patient is still rejected.
 
 ### Deleting Archived Studies from the PACS
 
-By default, archiving a study (the `archive` endpoint or the auto-archive task) also deletes the study's files from dcm4chee, which removes the study from the PACS database too. The study's CARE record is then soft-deleted as well, so it is no longer listed, even as archived. **This cannot be undone.** Set `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` to `False` to only hide the study in CARE instead; its files stay in the PACS, and it is still listed when archived studies are requested.
+By default, archiving a study (the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint or the auto-archive task) also deletes the study's files from dcm4chee, which removes the study from the PACS database too. The study's CARE record is then soft-deleted as well, so it is no longer listed, even as archived. **This cannot be undone.** Set `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` to `False` to only hide the study in CARE instead; its files stay in the PACS, and it is still listed when archived studies are requested.
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -147,9 +147,19 @@ By default, archiving a study (the `archive` endpoint or the auto-archive task) 
 
 dcm4chee only deletes a study permanently once it is rejected, so the study is first rejected with the rejection note code `113001^DCM`, then deleted. The code is set in `constants.py` (`PACS_DELETE_REJECTION_CODE`) and must be configured as a rejection note in dcm4chee.
 
-The files are deleted before the study is marked archived. If the PACS delete fails, the `archive` endpoint returns `502` (or `504` on timeout) and the study stays unarchived. The auto-archive task skips the study and retries it on its next run. A study the PACS no longer has is treated as already deleted. The files are kept in the PACS if another unarchived CARE study record has the same Study Instance UID. The archived record is then kept in CARE too.
+The files are deleted before the study is marked archived. If the PACS delete fails, the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint returns `502` (or `504` on timeout) and the study stays unarchived. The auto-archive task skips the study and retries it on its next run. A study the PACS no longer has is treated as already deleted. The files are kept in the PACS if another unarchived CARE study record has the same Study Instance UID. The archived record is then kept in CARE too.
 
-Uploading a study again after it was archived creates a new, active CARE study record and links it to the service request. The archived record is left as it is. If the archive did not delete the files from the PACS, re-uploading the same files is rejected as a duplicate (see `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`).
+Uploading a study again after it was archived creates a new, active CARE study record under the same imaging study. The archived record is left as it is. If the archive did not delete the files from the PACS, re-uploading the same files is rejected as a duplicate (see `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`).
+
+### External APIs
+
+Machine-to-machine endpoints for the modality worklist server and other integrations live under `facility/{facility_id}/external/`. They authenticate with the static API key: the `Authorization` header must equal `CARE_RADIOLOGY_WEBHOOK_SECRET` (`401` otherwise). Each is rate-limited per source IP by its own setting (django-ratelimit rate strings):
+
+| Endpoint | Purpose | Rate-limit setting (default) |
+| --- | --- | --- |
+| `GET facility/{facility_id}/external/worklist/` | Active service requests of the facility, newest first, each with its activity definition's locations and the active, available devices at each. Filters: `modality` (a location name: only requests at that location, each listing just that location and its devices), `created_date_after`, `created_date_before`. Paginated with `limit` / `offset` (default 14, max 200) and returns `count`. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST` (`100/m`) |
+| `POST facility/{facility_id}/external/imaging_study/upload/` | Uploads a DICOM file (`file` only) and links it by its Accession Number to the newest non-cancelled imaging study in the facility, whose patient the study then belongs to. A file whose accession number is unreadable, missing, or matches no imaging study is rejected (`400`) before it reaches the PACS. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL` (`2000/m`) |
+| `PATCH facility/{facility_id}/external/imaging_study/status/` | MPPS status update: sets the service request's imaging study to `study_status` (`IN_PROGRESS`, `COMPLETED` or `CANCELLED`; a study already `COMPLETED` or `CANCELLED` keeps its status), then adds the facility tag whose display is the matching MPPS status (`Scan Started`, `Scan Completed` or `Scan Cancelled` respectively) to the service request, if the facility has one. | `CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS` (`200/m`) |
 
 [Extended Docs on Plug Installation](https://care-be-docs.ohc.network/pluggable-apps/configuration.html)
 

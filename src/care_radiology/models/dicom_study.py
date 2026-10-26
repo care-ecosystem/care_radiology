@@ -1,18 +1,11 @@
-from care.emr.models import EMRBaseModel
-from care.emr.models.patient import Patient
 from django.db import models
 
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest
+from care.emr.models import EMRBaseModel
+from care_radiology.models.imaging_study import ImagingStudy
 
 
 class DicomStudy(EMRBaseModel):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="dicom_studies")
-    radiology_service_request = models.ForeignKey(
-        RadiologyServiceRequest,
-        on_delete=models.CASCADE,
-        related_name="studies",
-        null=True,
-    )
+    imaging_study = models.ForeignKey(ImagingStudy, on_delete=models.CASCADE, related_name="studies")
     dicom_study_uid = models.CharField(max_length=500)
 
     is_archived = models.BooleanField(default=False)
@@ -25,12 +18,14 @@ class DicomStudy(EMRBaseModel):
         blank=True,
         related_name="archived_dicom_studies",
     )
+    number_of_series = models.PositiveIntegerField(null=True, blank=True)
+    number_of_instances = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["patient", "dicom_study_uid"],
+                fields=["imaging_study", "dicom_study_uid"],
                 condition=models.Q(is_archived=False),
-                name="unique_patient_active_study_uid",
+                name="unique_imaging_study_active_study_uid",
             )
         ]

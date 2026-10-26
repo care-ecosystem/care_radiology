@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 
 import requests
+from django.utils import timezone
 
 from care_radiology.constants import DCM4CHEE_BASEURL
 from care_radiology.settings import plugin_settings
@@ -26,6 +27,7 @@ class DICOM_TAG(Enum):
     StudyDescription = "00081030"
     StudyDate = "00080020"
     StudyTime = "00080030"
+    TimezoneOffsetFromUTC = "00080201"
     AccessionNumber = "00080050"
 
     SeriesInstanceUID = "0020000E"
@@ -38,62 +40,6 @@ class DICOM_TAG(Enum):
     ReferencedInstanceUID = "00081155"
 
     ReferencedSOPSQ = "00081199"
-
-
-def fetch_study(dicom_study_uid):
-    def first(dcm, tag):
-        values = d_find(dcm, tag)
-        return values[0] if values else None
-
-    study_uid = dicom_study_uid
-
-    study = d_query_study(study_uid)
-
-    if study is None:
-        return None
-
-    # Query series list, handle timeout/failure gracefully
-    series_data = d_query_series_for_study(study_uid)
-    if series_data is None:
-        return None
-
-    series = [
-        {
-            "series_uid": d_find(s, DICOM_TAG.SeriesInstanceUID.value)[0],
-            "series_number": d_find(s, DICOM_TAG.SeriesNumber.value),
-            "series_instance_count": d_find(s, DICOM_TAG.NumberOfSeriesRelatedInstances.value),
-            "series_description": d_find(s, DICOM_TAG.SeriesDescription.value),
-            "series_modality": d_find(s, DICOM_TAG.SeriesModality.value),
-        }
-        for s in series_data
-    ]
-
-    study_description = (
-        d_find(study, DICOM_TAG.StudyDescription.value)[0]
-        if len(d_find(study, DICOM_TAG.StudyDescription.value)) > 0
-        else None
-    )
-
-    study_date_raw = first(study, DICOM_TAG.StudyDate.value)
-    study_time_raw = first(study, DICOM_TAG.StudyTime.value)
-
-    if study_date_raw and study_time_raw:
-        study_date = d_datetime_to_iso(study_date_raw, study_time_raw)
-    elif study_date_raw:
-        study_date = d_datetime_to_iso(study_date_raw)
-    else:
-        study_date = None
-
-    cachable = {
-        "study_uid": study_uid,
-        "study_date": study_date,
-        "study_description": study_description,
-        "study_modalities": d_find(study, DICOM_TAG.StudyModalities.value),
-        "study_accession": d_find(study, DICOM_TAG.AccessionNumber.value),
-        "study_series": series,
-    }
-
-    return cachable
 
 
 def _query_pacs(url, log_ctx, params=None):
@@ -149,6 +95,7 @@ def d_query_study(study_uid):
                     DICOM_TAG.StudyModalities.value,
                     DICOM_TAG.StudyDate.value,
                     DICOM_TAG.StudyTime.value,
+                    DICOM_TAG.TimezoneOffsetFromUTC.value,
                 ]
             ),
         },
@@ -173,7 +120,7 @@ def d_find(data: any, key):
     return results
 
 
-def d_datetime_to_iso(da, tm=None):
+def d_datetime_to_iso(da, tm=None, tz_offset=None):
     if not da:
         return None
 
@@ -182,22 +129,26 @@ def d_datetime_to_iso(da, tm=None):
     day = int(da[6:8])
 
     if tm:
-        # Parse time (HHMMSS[.ffffff])
-        hours = int(tm[0:2])
-        minutes = int(tm[2:4])
-        seconds = int(tm[4:6])
-        microseconds = 0
-
-        if "." in tm:
-            fraction = tm.split(".")[1]
-            fraction = (fraction + "000000")[:6]
-            microseconds = int(fraction)
+        # TM is HH[MM[SS[.FFFFFF]]]; older files may use HH:MM:SS.
+        hhmmss, _, fraction = tm.strip().replace(":", "").partition(".")
+        hours = int(hhmmss[0:2])
+        minutes = int(hhmmss[2:4] or 0)
+        seconds = int(hhmmss[4:6] or 0)
+        microseconds = int((fraction + "000000")[:6])
 
         dt = datetime(year, month, day, hours, minutes, seconds, microseconds)
     else:
         dt = datetime(year, month, day)
 
-    return dt.isoformat()
+    # TimezoneOffsetFromUTC (0008,0201), e.g. "+0530". Without it, or if it is
+    # malformed, the study is assumed to be in the server's timezone.
+    if tz_offset:
+        try:
+            return dt.replace(tzinfo=datetime.strptime(tz_offset.strip(), "%z").tzinfo).isoformat()
+        except ValueError:
+            pass
+
+    return timezone.make_aware(dt).isoformat()
 
 
 def parse_date(date_str):

@@ -69,13 +69,15 @@ paths:
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
         DICOM modality worklist. Authenticated with static API key
-        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by modality device
-        name or date range.
+        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by location name
+        (`modality`) or date range.
 
-        Each entry carries the `accession_number` from `ImagingStudy`, and the
-        `devices` whose `current_location` is one of the service request's
-        `activity_definition.locations` (narrowed to `modality` when given). Devices are
-        fetched in one query for the whole worklist.
+        Each entry carries the `accession_number` from `ImagingStudy`, and the `locations` of the
+        service request's `activity_definition.locations`, each with the `devices` whose
+        `current_location` it is. With `modality`, only requests that include a location of that
+        name are returned, and each lists only that location, with all its devices: every device
+        in a location shares the same worklist. Devices are fetched in one query for the whole
+        worklist.
       operationId: dicomWorklist
       security:
         - StaticApiKey: []
@@ -83,10 +85,12 @@ paths:
         - $ref: '#/components/parameters/FacilityId'
         - name: modality
           in: query
-          description: Filter by modality device registered_name (case-insensitive)
+          description: |
+            Filter by location name (case-insensitive): only service requests whose
+            `activity_definition.locations` include a location of the facility with this name
           schema:
             type: string
-            example: "CT"
+            example: "CT Room 1"
         - name: created_date_after
           in: query
           description: Start date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
@@ -268,14 +272,18 @@ paths:
       description: |
         Webhook endpoint called by the DICOM worklist server with Modality Performed
         Procedure Step (MPPS) status updates for a service request of the facility given in
-        the path. Maps `study_status` to a facility `TagConfig` entry and appends it to
-        `ServiceRequest.tags` (duplicates are skipped). Authenticated with static API key.
-        All payloads are persisted to `RadiologyWebhookLogs` with `type="MPPS"`.
+        the path. Authenticated with static API key. All payloads are persisted to
+        `RadiologyWebhookLogs` with `type="MPPS"`.
 
-        `study_status` is expected to be one of `SCAN_STARTED`, `SCAN_COMPLETED`,
-        `DISCONTINUED` (an unrecognized value is still processed, just logged as a
-        warning) and must match a `TagConfig.display` value configured for the
-        service request's facility.
+        `study_status` is the imaging study status to set (`IN_PROGRESS`, `COMPLETED` or
+        `CANCELLED`):
+        - Imaging study: its `status` is set to `study_status`. An imaging study already
+          `COMPLETED` or `CANCELLED` is left unchanged.
+        - Tag (optional): after the status update, the facility `TagConfig` whose
+          `display` is the matching MPPS status is appended to `ServiceRequest.tags`
+          (duplicates are skipped): `IN_PROGRESS` → `Scan Started`, `COMPLETED` →
+          `Scan Completed`, `CANCELLED` → `Scan Cancelled`. With no such tag, only the
+          imaging study is updated.
       operationId: webhookStatus
       security:
         - StaticApiKey: []
@@ -289,10 +297,13 @@ paths:
               $ref: '#/components/schemas/WebhookStatusPayload'
             example:
               service_request_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              study_status: "SCAN_STARTED"
+              study_status: "IN_PROGRESS"
       responses:
         '200':
-          description: Tag updated successfully, or already present
+          description: |
+            Status updated, with the tag added or already present. When the tag is already
+            on the service request, only `detail` ("Tag already set for this service
+            request"), `service_request_id`, `study_status` and `tag_id` are returned.
           content:
             application/json:
               schema:
@@ -300,9 +311,9 @@ paths:
         '400':
           description: |
             Payload failed validation against `WebhookMppsSpec` (missing/invalid
-            `service_request_id` or `study_status`), or a business rule failed: the service
-            request's facility is missing, or no `TagConfig.display` matches `study_status`
-            for that facility. A malformed JSON body (unparseable syntax) instead returns
+            `service_request_id`, or `study_status` not one of `IN_PROGRESS`, `COMPLETED`,
+            `CANCELLED`), or a business rule failed: the service request's facility is
+            missing. A malformed JSON body (unparseable syntax) instead returns
             DRF's default `{"detail": ...}` shape — see the `Error` schema.
           content:
             application/json:
@@ -315,12 +326,12 @@ paths:
                       - type: "missing"
                         loc: ["study_status"]
                         msg: "Field required"
-                tag_not_found:
+                invalid_status:
                   value:
                     errors:
-                      - type: "validation_error"
-                        msg:
-                          study_status: "Tag configuration not found for status: SCAN_STARTED"
+                      - type: "literal_error"
+                        loc: ["study_status"]
+                        msg: "Input should be 'IN_PROGRESS', 'COMPLETED' or 'CANCELLED'"
                 facility_not_found:
                   value:
                     errors:
@@ -330,7 +341,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: Facility or ServiceRequest not found
+          description: Facility, ServiceRequest or its ImagingStudy not found
           content:
             application/json:
               schema:
@@ -368,7 +379,7 @@ paths:
       summary: List imaging studies for an encounter
       description: |
         Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
-        on `ImagingStudy.encounter`. Rows whose service request is deleted are left out. Each
+        on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed. Each
         has the encounter and service request from core base specs only; use the retrieve for
         the full service request. Archived DICOM studies are always left out of `studies[]`
         here; `include_archived` is only supported on the retrieve.
@@ -482,7 +493,7 @@ paths:
         Sets `status` on the `ImagingStudy` linked to a CARE `ServiceRequest` of the patient,
         looked up by the service request's own `external_id`, like the retrieve. Any status can
         be set from any status. Returns the same body as the retrieve with its default, so
-        `studies[]` includes archived studies.
+        `studies[]` leaves out archived studies.
 
         Requires `can_write_radiology_data` permission on the service request's facility.
       operationId: updateImagingStudyStatus
@@ -537,15 +548,21 @@ paths:
       description: |
         Upload a DICOM (.dcm) file for a patient. The file is forwarded to DCM4CHEE,
         the study UID is extracted from the response, and a `DicomStudy` record is
-        created or updated in CARE and linked to the given service request's
-        `ImagingStudy`, which adds it to that imaging study's `studies[]`. The study is then cached
-        and returned.
+        created or updated in CARE and linked to an `ImagingStudy`, which adds it to that
+        imaging study's `studies[]`. The study is then cached and returned.
 
-        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, the file's accession number
-        must match `ImagingStudy.accession_number` of the service request. When it is off,
-        the accession number is not checked.
+        With `service_request_id`, the study is linked to that service request's
+        `ImagingStudy`. Without it, the study is linked to the encounter's one `ImagingStudy`
+        without a service request, created on the first such upload; that imaging study is
+        listed for the encounter with `service_request: null` and cannot be retrieved by
+        service request.
 
-        Requires `can_write_radiology_data` permission on the service request's facility.
+        When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on and `service_request_id` is
+        given, the file's accession number must match `ImagingStudy.accession_number` of the
+        service request. Otherwise the accession number is not checked.
+
+        Requires `can_write_radiology_data` permission on the service request's facility, or
+        on the encounter's facility when no service request is given.
       operationId: dicomUpload
       requestBody:
         required: true
@@ -560,18 +577,21 @@ paths:
                 encounter_id:
                   type: string
                   format: uuid
-                  description: Encounter external_id the service request belongs to. Must belong to the patient.
+                  description: Encounter external_id. Must belong to the patient.
                 service_request_id:
                   type: string
                   format: uuid
-                  description: ServiceRequest external_id the study is linked to. Must belong to the patient.
+                  description: |
+                    Optional. ServiceRequest external_id the study is linked to. Must belong to
+                    the patient and to the encounter. When omitted, the study is linked to the
+                    encounter's imaging study without a service request.
                 file:
                   type: string
                   format: binary
                   description: DICOM file. The filename must end in `.dcm` or `.dicom` (case-insensitive).
       responses:
         '201':
-          description: DICOM file uploaded, study record created/updated and linked to the service request
+          description: DICOM file uploaded, study record created/updated and linked to an imaging study
           content:
             application/json:
               schema:
@@ -589,14 +609,15 @@ paths:
                   service_request_id:
                     type: string
                     format: uuid
-                    description: ServiceRequest external_id the study was linked to
+                    description: ServiceRequest external_id the study was linked to; absent when no `service_request_id` was given
         '400':
           description: |
-            A required field is missing, the file is not a `.dcm` / `.dicom`, or the encounter
-            or service request does not belong to the patient. When
-            `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on, this is also returned if the
+            A required field is missing, the file is not a `.dcm` / `.dicom`, or the service
+            request is not of the encounter. When `CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER` is on and
+            `service_request_id` is given, this is also returned if the
             file's accession number is unreadable, missing, or does not match
-            `ImagingStudy.accession_number`.
+            `ImagingStudy.accession_number`, or the service request has no `ImagingStudy`
+            (`imaging_study_missing`).
           content:
             application/json:
               schema:
@@ -609,7 +630,6 @@ paths:
                         msg:
                           file: ["This value is required"]
                           encounter_id: ["This value is required"]
-                          service_request_id: ["This value is required"]
                 bad_extension:
                   value:
                     errors:
@@ -627,7 +647,15 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: No such patient, or no encounter or service request with this external_id for the patient
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Encounter matches the given query."
         '409':
           description: |
             The file reached DCM4CHEE, but the study is already linked to a different service
@@ -672,12 +700,13 @@ paths:
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
         `study_id` is the `id` of an entry in an imaging study's `studies[]`. The study must
-        already be linked to a service request (via the imaging study `upload`, or via
-        the external upload (`dicomUploadExternal`) when its accession number matched) — archiving is rejected
-        otherwise, since authorization is resolved through
-        `imaging_study.service_request.facility`. A study that the external upload
-        stored unlinked therefore cannot be archived through this API. Requires
-        `can_write_radiology_data` permission on that facility.
+        be linked to an imaging study: a service request's (via the imaging study `upload` with
+        `service_request_id`, or the external upload (`dicomUploadExternal`)), or the encounter's
+        imaging study without a service request (via the imaging study `upload` without
+        `service_request_id`). Archiving is rejected otherwise. Authorization is resolved
+        through `imaging_study.service_request.facility`, or `imaging_study.encounter.facility`
+        when the imaging study has no service request. Requires `can_write_radiology_data`
+        permission on that facility.
 
         There is no unarchive endpoint, matching the reference `FileUpload`/`ReportUpload`
         archive actions.
@@ -700,7 +729,7 @@ paths:
         '400':
           description: |
             Payload failed validation against `DicomStudyArchiveSpec` (missing/empty
-            `archive_reason`), or the study is not linked to a service request.
+            `archive_reason`), or the study is not linked to an imaging study.
           content:
             application/json:
               schema:
@@ -717,7 +746,7 @@ paths:
                     errors:
                       - type: "validation_error"
                         msg:
-                          detail: "Cannot archive a study that is not linked to a service request"
+                          detail: "Cannot archive a study that is not linked to an imaging study"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -948,11 +977,11 @@ components:
       name: include_archived
       in: query
       description: |
-        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `true`, so the
-        retrieve returns all studies; `false` leaves the archived ones out.
+        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `false`, so the
+        retrieve leaves the archived ones out; `true` includes them.
       schema:
         type: boolean
-        default: true
+        default: false
     Limit:
       name: limit
       in: query
@@ -1039,8 +1068,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
@@ -1333,9 +1363,9 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are included unless
-            `include_archived=false` is passed to the retrieve; the PATCH response always includes
-            them. A study DCM4CHEE cannot return, or whose details fail to
+            DCM4CHEE (cached for an hour). Archived studies are left out unless
+            `include_archived=true` is passed to the retrieve; the PATCH response also leaves them
+            out. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -1438,8 +1468,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
@@ -1451,10 +1482,14 @@ components:
             type: string
           example: ["CT"]
         number_of_series:
-          type: number
+          type: integer
+          nullable: true
+          description: Number of series. Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 2
         number_of_instances:
-          type: number
+          type: integer
+          nullable: true
+          description: Sum of the series' instance counts (images). Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 1
         study_series:
           type: array
@@ -1489,8 +1524,9 @@ components:
           format: date-time
           nullable: true
           description: |
-            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, and
-            TimezoneOffsetFromUTC (0008,0201) is not read, so the CARE server's TIME_ZONE is used
+            Study date/time from DICOM StudyDate/StudyTime. These have no timezone, so the
+            offset comes from TimezoneOffsetFromUTC (0008,0201) when the study has a valid one,
+            and from the CARE server's TIME_ZONE otherwise
           example: "2026-06-01T10:30:00+05:30"
         study_description:
           type: string
@@ -1503,16 +1539,13 @@ components:
           example: ["CT"]
         number_of_series:
           type: integer
-          description: |
-            Number of series in the study, from the cached DCM4CHEE study details (cached for
-            an hour), so it may lag behind DCM4CHEE by up to that long
+          nullable: true
+          description: Number of series. Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 2
         number_of_instances:
           type: integer
-          description: |
-            Number of instances (images) across all series of the study, from the cached
-            DCM4CHEE study details (cached for an hour), so it may lag behind DCM4CHEE by up
-            to that long
+          nullable: true
+          description: Sum of the series' instance counts (images). Stored on the DICOM study at each upload and kept after archive; null until known.
           example: 5
         study_series:
           type: array
@@ -1620,18 +1653,19 @@ components:
           description: CARE ServiceRequest external_id
         study_status:
           type: string
+          enum: [IN_PROGRESS, COMPLETED, CANCELLED]
           description: |
-            MPPS status value. Expected to be one of SCAN_STARTED, SCAN_COMPLETED,
-            DISCONTINUED, but other values are still processed (with a warning logged),
-            as long as a matching facility TagConfig.display exists.
-          example: "SCAN_STARTED"
+            Imaging study status to set. The facility TagConfig whose display is the
+            matching MPPS status (Scan Started, Scan Completed or Scan Cancelled) is also
+            added to the service request's tags, if one exists.
+          example: "IN_PROGRESS"
 
     WebhookStatusResponse:
       type: object
       properties:
         detail:
           type: string
-          example: "MPPS status tag updated successfully"
+          example: "MPPS status processed successfully"
         service_request_id:
           type: string
           format: uuid
@@ -1639,11 +1673,15 @@ components:
           type: string
         tag_id:
           type: integer
-          description: Internal TagConfig id (matches an entry in ServiceRequest.tags)
+          nullable: true
+          description: |
+            Internal TagConfig id (matches an entry in ServiceRequest.tags), or null when
+            the facility has no tag for the matching MPPS status.
         tag_uuid:
           type: string
           format: uuid
-          description: TagConfig external_id
+          nullable: true
+          description: TagConfig external_id, or null when no facility tag matches
         current_tags:
           type: array
           items:

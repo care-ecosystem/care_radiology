@@ -1,38 +1,39 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 import requests
-from care.emr.models.service_request import ServiceRequest
-from care.emr.models.tag_config import TagConfig
-from care.utils.shortcuts import get_object_or_404
 from django.core.cache import cache
 from django.db import connection, transaction
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from care.emr.models.encounter import Encounter
+from care.emr.models.service_request import ServiceRequest
+from care.emr.models.tag_config import TagConfig
+from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
-    DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE,
-    DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
     DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
-    MPPS_STATUS_DISCONTINUED,
-    MPPS_STATUS_SCAN_STARTED,
+    MPPS_TAG_DISPLAY_BY_STATUS,
     PACS_DELETE_REJECTION_CODE,
-    VALID_MPPS_STATUSES,
 )
 from care_radiology.models.dicom_study import DicomStudy
-from care_radiology.models.radiology_service_request import RadiologyServiceRequest, RadiologyServiceRequestStatus
+from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.settings import plugin_settings
 from care_radiology.utils.dicom import (
     DICOM_TAG,
+    DicomParseError,
     d_datetime_to_iso,
     d_find,
     d_query_instance,
     d_query_series_for_study,
     d_query_study,
     encode_file_multipart_related,
+    read_accession_number,
     read_sop_instance_uid,
 )
 
@@ -47,10 +48,11 @@ class DicomUploadError(Exception):
         self.extra = extra or {}
 
 
-class WebhookConflictError(Exception):
-    def __init__(self, message):
+class StudyLinkConflictError(Exception):
+    def __init__(self, message, study_uid=None):
         super().__init__(message)
         self.message = message
+        self.study_uid = study_uid
 
 
 class PacsDeleteError(Exception):
@@ -87,7 +89,7 @@ def _upload_lock_timeout():
     )
 
 
-def upload_dicom_file(patient, dcm_file, user=None):
+def upload_dicom_file(imaging_study, dcm_file, user=None):
     """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
@@ -167,31 +169,37 @@ def upload_dicom_file(patient, dcm_file, user=None):
         study_uid = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)[0]
         with transaction.atomic():
             _lock_study_uid(study_uid)
-            (dicom_study, _) = DicomStudy.objects.update_or_create(
+            linked_elsewhere = _check_study_not_linked_elsewhere(imaging_study, study_uid)
+            (dicom_study, created) = DicomStudy.objects.update_or_create(
                 dicom_study_uid=study_uid,
-                patient=patient,
+                imaging_study=imaging_study,
                 is_archived=False,
                 defaults={"updated_by": user} if user else {},
                 create_defaults={"created_by": user, "updated_by": user},
             )
-
-            key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
-            cache.delete(key)
-
-            study_details = fetch_study(dicom_study)
-            if study_details is None:
-                raise DicomUploadError(
-                    "Upload succeeded but failed to fetch complete study details from DCM4CHE",
-                    status_code=500,
-                    extra={"study_uid": study_uid},
+            if created and linked_elsewhere:
+                logger.warning(
+                    "DICOM study validation is disabled on this instance, adding study %s to imaging study %s as well",
+                    study_uid,
+                    imaging_study.external_id,
                 )
+
+        cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
+        study_details = fetch_study(dicom_study)
+        if study_details is None:
+            raise DicomUploadError(
+                "Upload succeeded but failed to fetch complete study details from DCM4CHE",
+                status_code=500,
+                extra={"study_uid": study_uid},
+            )
+        save_study_counts(dicom_study, study_details)
 
         return {
             "study_uid": study_uid,
             "study": study_details,
         }
 
-    except DicomUploadError:
+    except (DicomUploadError, StudyLinkConflictError):
         raise
     except Exception as e:
         logger.exception("Unexpected error during DICOM upload")
@@ -202,161 +210,160 @@ def upload_dicom_file(patient, dcm_file, user=None):
             cache.delete(lock_key)
 
 
-def link_service_request_to_study(service_request, study_uid, raw_data=None, user=None):
-    with transaction.atomic():
-        (rsr, created) = RadiologyServiceRequest.objects.get_or_create(
-            service_request=service_request, defaults={"raw_data": raw_data} if raw_data is not None else {}
-        )
-        if not created and raw_data is not None:
-            rsr.raw_data = raw_data
-            rsr.save(update_fields=["raw_data"])
-
-        # select_for_update() makes a concurrent get_or_create() for the same
-        # (patient, study_uid) block on this row (or on the insert) rather than
-        # racing past the check below with stale data.
-        _lock_study_uid(study_uid)
-        study, _ = DicomStudy.objects.select_for_update().get_or_create(
-            dicom_study_uid=study_uid,
-            patient=service_request.patient,
-            is_archived=False,
-            defaults={"created_by": user, "updated_by": user},
-        )
-        if study.radiology_service_request_id is not None and study.radiology_service_request_id != rsr.id:
-            if plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
-                raise WebhookConflictError("Study is already linked to a different service request")
-            logger.warning(
-                "DICOM study validation is disabled on this instance, relinking study %s to service request %s",
-                study_uid,
-                service_request.external_id,
-            )
-
-        if study.radiology_service_request_id != rsr.id:
-            study.radiology_service_request = rsr
-            update_fields = ["radiology_service_request", "modified_date"]
-            if user:
-                study.updated_by = user
-                update_fields.append("updated_by")
-            study.save(update_fields=update_fields)
-
-        if rsr.status != RadiologyServiceRequestStatus.CANCELLED:
-            rsr.status = RadiologyServiceRequestStatus.COMPLETED
-            rsr.save(update_fields=["status"])
-
-    return {
-        "external_id": rsr.external_id,
-        "data": rsr.raw_data,
-        "status": rsr.status,
-    }
-
-
-def ensure_study_linked_to_service_request(service_request, study_uid, user=None):
+def save_study_counts(dicom_study, study_details):
     """
-    Links a newly uploaded study to its service request if not already linked, returning True 
-    if linked and False if no action was needed. Raises WebhookConflictError for conflicts 
-    (unless validation is disabled), with results cached per study/request pair.
+    Saves the study's series and instance counts from its PACS details, only ever raising them,
+    so a parallel upload that fetched the study earlier cannot lower them. An unreadable count
+    is logged and skipped rather than failing the upload.
     """
-    cache_key = DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study_uid, service_request.external_id)
-    if cache.get(cache_key):
-        return False
+    series = study_details["study_series"]
+    try:
+        number_of_instances = sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
+    except (TypeError, ValueError):
+        logger.warning("Study %s has an unreadable series instance count, counts not updated", dicom_study.pk)
+        return
 
-    linked_service_requests = set(
-        DicomStudy.objects.filter(
-            dicom_study_uid=study_uid,
-            radiology_service_request__isnull=False,
-            is_archived=False,
-            deleted=False,
-        ).values_list("radiology_service_request__service_request__external_id", flat=True)
+    DicomStudy.objects.filter(pk=dicom_study.pk).update(
+        number_of_series=Greatest("number_of_series", len(series)),
+        number_of_instances=Greatest("number_of_instances", number_of_instances),
     )
 
-    if service_request.external_id in linked_service_requests:
-        newly_linked = False
-    elif linked_service_requests and plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
-        # Left uncached: an operator undoing the other link has to take effect at once.
-        other = sorted(str(sr_id) for sr_id in linked_service_requests)[0]
-        raise WebhookConflictError(f"Study is already linked to a different service request: {other}")
-    else:
-        link_service_request_to_study(service_request, study_uid, user=user)
-        newly_linked = True
 
-    cache.set(cache_key, True, timeout=DICOM_STUDY_LINK_CACHE_TIMEOUT_SECONDS)
-    return newly_linked
+def _check_study_not_linked_elsewhere(imaging_study, study_uid):
+    """
+    Rejects a Study UID that a non-archived record already has under another imaging study. Runs
+    under the Study UID lock, so concurrent uploads cannot both pass it. Returns whether another
+    imaging study holds it, which is only allowed with the check disabled, and never across patients.
+    """
+    others = DicomStudy.objects.filter(dicom_study_uid=study_uid, is_archived=False).exclude(
+        imaging_study=imaging_study
+    )
+    # Checked over every record rather than one, since with the check disabled the UID can
+    # already sit under several imaging studies.
+    if others.exclude(imaging_study__patient_id=imaging_study.patient_id).exists():
+        raise StudyLinkConflictError("Study is already linked to another patient", study_uid=study_uid)
+
+    linked_elsewhere = others.select_related("imaging_study__service_request").first()
+    if linked_elsewhere is None:
+        return False
+    if not plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
+        return True
+    other = linked_elsewhere.imaging_study.service_request
+    if other is None:
+        raise StudyLinkConflictError("Study is already linked to a different imaging study", study_uid=study_uid)
+    raise StudyLinkConflictError(
+        f"Study is already linked to a different service request: {other.external_id}", study_uid=study_uid
+    )
 
 
-def process_study_webhook(data):
-    # Support lookup by either service_request_id or accession_number
-    if (data.get("service_request_id") or data.get("accession_number")) and data.get("study_id"):
-        try:
-            if data.get("service_request_id"):
-                # Priority 1: Lookup by service_request_id (external_id)
-                sr = ServiceRequest.objects.get(external_id=data["service_request_id"])
-            elif data.get("accession_number"):
-                # Priority 2: Lookup by accession_number on RadiologyServiceRequest
+def imaging_study_for_service_request(service_request):
+    try:
+        return service_request.imaging_study
+    except ImagingStudy.DoesNotExist:
+        pass
+    imaging_study, _ = ImagingStudy.objects.get_or_create(
+        service_request=service_request,
+        defaults={"encounter_id": service_request.encounter_id, "patient_id": service_request.patient_id},
+    )
+    return imaging_study
 
-                # If accession_number is duplicated across ServiceRequests, ignore older
-                # ones and use the most recently created match instead of failing:
-                rsr = (
-                    RadiologyServiceRequest.objects.filter(accession_number=data["accession_number"])
-                    .order_by("-created_date")
-                    .select_related("service_request")
-                    .first()
-                )
-                sr = rsr.service_request if rsr else None
-                if sr is None:
-                    raise ServiceRequest.DoesNotExist
-            else:
-                raise WebhookConflictError("No service_request_id or accession_number provided")
-        except ServiceRequest.DoesNotExist:
-            raise WebhookConflictError("No matching service request")
 
-        return link_service_request_to_study(sr, data["study_id"], raw_data=data)
+def _accession_error(error_type, msg, **extra):
+    # emr_exception_handler returns an {"errors": [...]} detail as is, with status 400.
+    return ValidationError({"errors": [{"type": error_type, "msg": msg, **extra}]})
 
-    elif data.get("patient_id") and data.get("study_id"):
-        from care.emr.models.patient import Patient
 
-        patient = Patient.objects.filter(instance_identifiers__contains=[{"value": data.get("patient_id")}]).first()
-        if not patient:
-            raise WebhookConflictError("No matching patient")
+def read_file_accession_number(dcm_file):
+    try:
+        accession_number = read_accession_number(dcm_file)
+    except DicomParseError as e:
+        raise _accession_error(
+            "accession_number_unreadable",
+            "Could not read the accession number from the DICOM file",
+            details=e.message,
+        ) from e
+    if not accession_number:
+        raise _accession_error("accession_number_missing", "DICOM file does not contain an accession number")
+    return accession_number
 
+
+def validate_accession_number(dcm_file, service_request):
+    file_accession_number = read_file_accession_number(dcm_file)
+    try:
+        imaging_study = service_request.imaging_study
+    except ImagingStudy.DoesNotExist:
+        raise _accession_error(
+            "imaging_study_missing", "Service request has no imaging study to match the accession number against"
+        ) from None
+    if file_accession_number != imaging_study.accession_number:
+        raise _accession_error(
+            "accession_number_mismatch", "Accession number in the DICOM file does not match the service request"
+        )
+
+
+def imaging_study_for_accession_number(accession_number, facility):
+    """Returns the newest non-cancelled imaging study in the facility with this accession number."""
+    imaging_study = (
+        ImagingStudy.objects.filter(
+            accession_number=accession_number,
+            service_request__facility=facility,
+            service_request__deleted=False,
+        )
+        .exclude(status=ImagingStudyStatus.CANCELLED)
+        .select_related("service_request")
+        .order_by("-created_date")
+        .first()
+    )
+    if imaging_study is None:
+        raise _accession_error(
+            "accession_number_unmatched",
+            "No imaging study in the facility has the file's accession number",
+        )
+    return imaging_study
+
+
+def imaging_study_for_encounter(encounter):
+    """Returns the encounter's one imaging study without a service request, creating it on first use."""
+    imaging_studies = ImagingStudy.objects.filter(encounter=encounter, service_request__isnull=True)
+    imaging_study = imaging_studies.first()
+    if imaging_study is None:
         with transaction.atomic():
-            _lock_study_uid(data.get("study_id"))
-            (study, _) = DicomStudy.objects.get_or_create(
-                dicom_study_uid=data.get("study_id"), patient=patient, is_archived=False, defaults={}
+            # Serialises the creation of that imaging study per encounter.
+            Encounter.objects.select_for_update().filter(pk=encounter.pk).first()
+            imaging_study = imaging_studies.first() or ImagingStudy.objects.create(
+                encounter=encounter, patient_id=encounter.patient_id
             )
-
-        return {
-            "external_id": study.external_id,
-            "data": data,
-        }
-
-    return None
+    return imaging_study
 
 
-def process_mpps_webhook(service_request_id, study_status):
-    if study_status not in VALID_MPPS_STATUSES:
-        logger.warning("[MPPS] Unexpected status: %s", study_status)
-
+def process_mpps_webhook(facility, service_request_id, study_status):
+    """
+    Sets the service request's imaging study to `study_status`, then adds the facility tag whose
+    display is the status's MPPS status (Scan Started, Scan Completed or Scan Cancelled) to the
+    service request, when the facility has one. An imaging study already COMPLETED or CANCELLED
+    keeps its status.
+    """
+    tag_display = MPPS_TAG_DISPLAY_BY_STATUS[study_status]
     with transaction.atomic():
-        service_request = get_object_or_404(ServiceRequest.objects.select_for_update(), external_id=service_request_id)
+        service_request = get_object_or_404(
+            ServiceRequest.objects.select_for_update(), external_id=service_request_id, facility=facility
+        )
+        imaging_study = get_object_or_404(ImagingStudy.objects.select_for_update(), service_request=service_request)
 
-        facility = service_request.facility
-        if not facility:
-            logger.error("[MPPS] Facility not found for SR")
-            raise ValidationError({"service_request_id": "Facility not found for service request"})
-        logger.info("[MPPS] Facility found: %s", facility.external_id)
+        if imaging_study.status not in [ImagingStudyStatus.COMPLETED, ImagingStudyStatus.CANCELLED]:
+            imaging_study.status = study_status
+            imaging_study.save(update_fields=["status", "modified_date"])
 
         try:
-            tag_config = TagConfig.objects.filter(facility=facility, display=study_status).first()
+            tag_config = TagConfig.objects.filter(facility=facility, display=tag_display).first()
         except Exception as e:
             logger.exception("[MPPS] Error fetching tag")
             raise APIException("Error fetching tag configuration") from e
 
-        if not tag_config:
-            logger.error("[MPPS] Tag not found for status: %s", study_status)
-            raise ValidationError({"study_status": f"Tag configuration not found for status: {study_status}"})
-        logger.info("[MPPS] Tag found: %s", tag_config.external_id)
-
         tags = service_request.tags or []
-        if tag_config.id in tags:
+        if not tag_config:
+            logger.info("[MPPS] No tag configured for %s, skipping tag update", tag_display)
+        elif tag_config.id in tags:
             logger.warning(
                 "[MPPS] Tag %s already exists in SR %s, skipping duplicate",
                 tag_config.id,
@@ -368,36 +375,22 @@ def process_mpps_webhook(service_request_id, study_status):
                 "study_status": study_status,
                 "tag_id": tag_config.id,
             }
-
-        try:
-            tags.append(tag_config.id)
-            service_request.tags = tags
-            service_request.save(update_fields=["tags"])
-        except Exception as e:
-            logger.exception("[MPPS] Error updating tags")
-            raise APIException("Error updating tags") from e
-
-        if study_status == MPPS_STATUS_SCAN_STARTED:
-            rsr_status = RadiologyServiceRequestStatus.IN_PROGRESS
-        elif study_status == MPPS_STATUS_DISCONTINUED:
-            rsr_status = RadiologyServiceRequestStatus.CANCELLED
         else:
-            rsr_status = None
-
-        if rsr_status:
-            RadiologyServiceRequest.objects.filter(service_request=service_request).exclude(
-                status__in=[RadiologyServiceRequestStatus.COMPLETED, RadiologyServiceRequestStatus.CANCELLED]
-            ).update(status=rsr_status)
-
-    logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
-    logger.info("[MPPS] Success! MPPS status tag updated via direct database write")
+            try:
+                tags.append(tag_config.id)
+                service_request.tags = tags
+                service_request.save(update_fields=["tags"])
+            except Exception as e:
+                logger.exception("[MPPS] Error updating tags")
+                raise APIException("Error updating tags") from e
+            logger.info("[MPPS] Tag %s appended to ServiceRequest tags", tag_config.id)
 
     return {
-        "detail": "MPPS status tag updated successfully",
+        "detail": "MPPS status processed successfully",
         "service_request_id": str(service_request.external_id),
         "study_status": study_status,
-        "tag_id": tag_config.id,
-        "tag_uuid": str(tag_config.external_id),
+        "tag_id": tag_config.id if tag_config else None,
+        "tag_uuid": str(tag_config.external_id) if tag_config else None,
         "current_tags": tags,
     }
 
@@ -413,7 +406,7 @@ def fetch_study(dicom_study):
     # record's own external_id is added on every return rather than cached.
     cached = cache.get(key)
     if cached:
-        return {**cached, "external_id": dicom_study.external_id}
+        return {**cached, "id": dicom_study.external_id}
 
     study = d_query_study(study_uid)
 
@@ -443,13 +436,8 @@ def fetch_study(dicom_study):
 
     study_date_raw = first(study, DICOM_TAG.StudyDate.value)
     study_time_raw = first(study, DICOM_TAG.StudyTime.value)
-
-    if study_date_raw and study_time_raw:
-        study_date = d_datetime_to_iso(study_date_raw, study_time_raw)
-    elif study_date_raw:
-        study_date = d_datetime_to_iso(study_date_raw)
-    else:
-        study_date = None
+    study_tz_offset_raw = first(study, DICOM_TAG.TimezoneOffsetFromUTC.value)
+    study_date = d_datetime_to_iso(study_date_raw, study_time_raw, study_tz_offset_raw)
 
     cachable = {
         "study_uid": study_uid,
@@ -460,7 +448,27 @@ def fetch_study(dicom_study):
     }
 
     cache.set(key, cachable, timeout=60 * 60)
-    return {**cachable, "external_id": dicom_study.external_id}
+    return {**cachable, "id": dicom_study.external_id}
+
+
+def fetch_studies(dicom_studies):
+    """
+    Fetches the PACS details of each study in parallel and returns them keyed by study id. A study
+    whose details cannot be fetched is logged and left out.
+    """
+
+    def fetch_or_none(dicom_study):
+        try:
+            return fetch_study(dicom_study)
+        except Exception:
+            logger.exception("Could not fetch study %s from PACS", dicom_study.dicom_study_uid)
+            return None
+
+    if not dicom_studies:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
+        results = executor.map(fetch_or_none, dicom_studies)
+    return {study.id: details for study, details in zip(dicom_studies, results, strict=True) if details}
 
 
 def _pacs_delete_timeout():
@@ -571,8 +579,4 @@ def archive_study(study, archive_reason, archived_by=None):
             update_fields.append("updated_by")
         study.save(update_fields=update_fields)
 
-    # A re-upload of this study has to link its new record, not reuse the cached link.
-    rsr = study.radiology_service_request
-    if rsr is not None and rsr.service_request_id is not None:
-        cache.delete(DICOM_STUDY_LINK_CACHE_KEY_TEMPLATE.format(study.dicom_study_uid, rsr.service_request.external_id))
     return study
