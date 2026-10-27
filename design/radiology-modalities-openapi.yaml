@@ -72,8 +72,8 @@ paths:
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
         DICOM modality worklist. Authenticated with static API key
-        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by location name
-        (`modality`) or date range.
+        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by the calling
+        machine's AE title (`calling_ae_title`), location name (`modality`) or date range.
 
         Each entry carries the `accession_number` from `ImagingStudy`, and the `locations` of the
         service request's `activity_definition.locations`, each with the `devices` whose
@@ -81,11 +81,31 @@ paths:
         name are returned, and each lists only that location, with all its devices: every device
         in a location shares the same worklist. Devices are fetched in one query for the whole
         worklist.
+
+        With `calling_ae_title`, CARE finds the facility's active, available modality device
+        whose `calling_ae_title` matches, takes its `current_location`, and returns only the
+        requests whose `activity_definition.locations` include that location. Each entry then
+        lists only that location, as with `modality`. The DICOM Enabler passes the C-FIND's
+        `Association.CallingAE` straight through. An AE title no such device has, or a device
+        with no location, returns `404` instead of the full worklist.
+
+        `modality` is kept for Enablers that are configured with a room name. When both are
+        given, both apply.
       operationId: dicomWorklist
       security:
         - StaticApiKey: []
       parameters:
         - $ref: '#/components/parameters/FacilityId'
+        - name: calling_ae_title
+          in: query
+          description: |
+            Filter by the AE title the machine sent as Calling AE (case-insensitive): only
+            service requests whose `activity_definition.locations` include the `current_location`
+            of the facility's active, available modality device with this `calling_ae_title`
+          schema:
+            type: string
+            maxLength: 16
+            example: "CT1"
         - name: modality
           in: query
           description: |
@@ -129,15 +149,29 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: The given facility does not exist
+          description: |
+            The given facility does not exist, or `calling_ae_title` matches no active, available
+            modality device of the facility, or that device has no location
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                errors:
-                  - type: "object_not_found"
-                    msg: "No Facility matches the given query."
+              examples:
+                facility_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No Facility matches the given query."
+                device_not_found:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "No Device matches the given query."
+                device_without_location:
+                  value:
+                    errors:
+                      - type: "object_not_found"
+                        msg: "Device has no location."
 
   /api/care_radiology/facility/{facility_id}/external/imaging_study/upload/:
     post:
@@ -1899,7 +1933,7 @@ components:
       required:
         - id
         - device_name
-        - modality
+        - modality_code
         - calling_ae_title
         - location
         - device_status
@@ -1913,9 +1947,11 @@ components:
         device_name:
           type: string
           example: Siemens SOMATOM CT
-        modality:
+        modality_code:
           type: string
-          description: DICOM modality code.
+          description: |
+            DICOM modality code of the machine, as sent in Modality (0008,0060), e.g. `CT`, `MR`,
+            `DX`, `CR`, `US`, `MG`, `XA`, `NM`.
           example: CT
         calling_ae_title:
           type: string
