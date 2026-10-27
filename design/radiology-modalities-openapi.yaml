@@ -1900,6 +1900,8 @@ components:
         - id
         - device_name
         - modality
+        - calling_ae_title
+        - location
         - device_status
         - assignment_status
       properties:
@@ -1915,6 +1917,28 @@ components:
           type: string
           description: DICOM modality code.
           example: CT
+        calling_ae_title:
+          type: string
+          maxLength: 16
+          description: |
+            AE title the machine sends as Calling AE when it queries the worklist (C-FIND) or
+            reports MPPS. The DICOM Enabler matches `Association.CallingAE` against it to find
+            the device. Unique among the facility's active modality devices.
+          example: CT1
+        location:
+          type: object
+          nullable: true
+          description: |
+            The device's `current_location` (its room). The worklist links service requests to
+            devices through this location. Null when the device has no location set.
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: FacilityLocation external_id
+            name:
+              type: string
+              example: CT Room 1
         device_status:
           $ref: '#/components/schemas/DeviceStatus'
         assignment_status:
