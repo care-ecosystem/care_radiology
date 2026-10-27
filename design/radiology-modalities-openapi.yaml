@@ -6,9 +6,13 @@ info:
     Endpoints the DICOM Enabler calls to discover the modality devices of a facility and to
     connect one of them to itself.
 
-    A device is listed only when its status is `active` and `available` and it is not already
-    connected to another DICOM Enabler. Once a device is connected to an enabler it no longer
-    appears in the list returned to other enablers.
+    Flow:
+    1. The Modality Emulator calls `GET .../external/modalities/` and shows the devices.
+    2. The user selects a device; the emulator calls `POST .../{device_external_id}/connect/`.
+    3. The device is now connected and no longer appears in any later modalities list.
+
+    A device is listed only when its status is `active` and `available` and it is not
+    connected to any DICOM Enabler.
 
     Authentication follows the existing `/external/worklist/` endpoint: the
     `Authorization` header carries the shared secret (`CARE_RADIOLOGY_WEBHOOK_SECRET`).
@@ -30,22 +34,12 @@ paths:
     get:
       tags: [Modalities]
       operationId: listAvailableModalities
-      summary: List modality devices available for a DICOM Enabler
+      summary: List modality devices available to connect
       description: |
         Returns the facility's modality devices whose status is `active` and `available`
-        and that are not connected to another DICOM Enabler.
-
-        A device already connected to the calling enabler (`dicom_enabler_id`) is still
-        returned, so the enabler can re-read its own configuration.
+        and that are not connected to any DICOM Enabler.
       parameters:
         - $ref: "#/components/parameters/FacilityId"
-        - name: dicom_enabler_id
-          in: query
-          required: true
-          description: Identifier of the calling DICOM Enabler.
-          schema:
-            type: string
-            example: enabler-ward-3-pc01
         - name: modality
           in: query
           required: false
@@ -87,31 +81,24 @@ paths:
     post:
       tags: [Modalities]
       operationId: connectModality
-      summary: Connect a modality device to a DICOM Enabler
+      summary: Mark a modality device as connected
       description: |
-        Marks the device as connected to the given DICOM Enabler. After this call the device is
-        excluded from `GET .../external/modalities/` for every other enabler.
+        Called after the user selects a device in the Modality Emulator, with the
+        `device_external_id` taken from the `GET .../external/modalities/` response. No request
+        body is sent. Marks the device as connected and returns its details. After this call the
+        device is excluded from every later `GET .../external/modalities/` response.
 
-        Calling it again with the same `dicom_enabler_id` is idempotent and returns `200`.
-        Calling it for a device connected to a different enabler returns `409`.
+        Calling it for a device that is already connected returns `409`.
       parameters:
         - $ref: "#/components/parameters/FacilityId"
         - $ref: "#/components/parameters/DeviceExternalId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ConnectModalityRequest"
       responses:
         "200":
-          description: Device is connected to the enabler.
+          description: Device is marked as connected; returns the connected device's details.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConnectModalityResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -119,13 +106,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Device is already connected to another DICOM Enabler, or is no longer `active` / `available`.
+          description: Device is already connected, or is no longer `active` / `available`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: Device is already connected to another DICOM Enabler.
+                detail: Device is already connected.
 
 components:
   securitySchemes:
@@ -221,11 +208,6 @@ components:
             port: 11112
         device_status:
           $ref: "#/components/schemas/DeviceStatus"
-        connected_dicom_enabler_id:
-          type: string
-          nullable: true
-          description: Enabler the device is connected to; `null` when not yet connected. Only ever the caller's own ID in list responses.
-          example: null
 
     ModalityListResponse:
       type: object
@@ -240,27 +222,15 @@ components:
           items:
             $ref: "#/components/schemas/Modality"
 
-    ConnectModalityRequest:
-      type: object
-      required: [dicom_enabler_id]
-      properties:
-        dicom_enabler_id:
-          type: string
-          description: Identifier of the DICOM Enabler claiming the device.
-          example: enabler-ward-3-pc01
-
     ConnectModalityResponse:
-      type: object
-      required: [device_external_id, dicom_enabler_id, connected_at]
-      properties:
-        device_external_id:
-          type: string
-          format: uuid
-        dicom_enabler_id:
-          type: string
-        connected_at:
-          type: string
-          format: date-time
+      allOf:
+        - $ref: "#/components/schemas/Modality"
+        - type: object
+          required: [connected_at]
+          properties:
+            connected_at:
+              type: string
+              format: date-time
 
     Error:
       type: object
