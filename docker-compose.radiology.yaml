@@ -54,8 +54,30 @@ services:
       - ohif
       - arc
 
+  orthanc:
+    image: orthancteam/orthanc:latest
+    restart: unless-stopped
+    ports:
+      - "8042:8042" # Web UI / REST API
+      - "4242:4242" # DICOM
+    environment:
+      ORTHANC__NAME: "CARE-ORTHANC"
+      ORTHANC__REGISTERED_USERS: |
+        {"admin": "admin"}
+      ORTHANC__DICOM_MODALITIES: |
+        {
+          "DCM4CHEE": ["DCM4CHEE", "arc", 11112]
+        }
+      ORTHANC__REMOTE_ACCESS_ALLOWED: "true"
+      ORTHANC__DICOM_AET: "ORTHANC"
+      ORTHANC__DICOM_PORT: "4242"
+      ORTHANC__OVERWRITE_INSTANCES: "true"
+    volumes:
+      - orthanc-data:/var/lib/orthanc/db
+
 volumes:
   ldap-data:
   ldap-config:
   arc-wildfly:
   arc-storage:
+  orthanc-data:

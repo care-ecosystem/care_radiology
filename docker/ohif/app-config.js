@@ -2,12 +2,90 @@
 
 window.config = {
   routerBasename: '/',
-  // whiteLabeling: {},
+  // Embedded in a care iframe, so the logo, patient banner and worklist link
+  // are redundant — and on a phone they overlap the toolbar. Dropping them
+  // gives the toolbar the full width of the header row.
+  whiteLabeling: {
+    createLogoComponentFn: React =>
+      React.createElement('div', { style: { display: 'none' } }),
+  },
   extensions: [],
   modes: [],
+  /*
+    The longitudinal mode opens with its left "Studies" panel expanded (280px),
+    which swallows a 320px screen. Start both side panels collapsed instead, so
+    each is a tap-to-open strip. `layoutTemplate` replaces the whole props
+    object, so the panel/viewport ids below are restated verbatim from
+    ohif-mode-longitudinal.js — re-resolve them if the image is upgraded.
+  */
+  modesConfiguration: {
+    '@ohif/mode-longitudinal': {
+      routes: [
+        {
+          path: 'longitudinal',
+          layoutTemplate: () => ({
+            id: '@ohif/extension-default.layoutTemplateModule.viewerLayout',
+            props: {
+              leftPanels: ['@ohif/extension-measurement-tracking.panelModule.seriesList'],
+              leftPanelClosed: true,
+              rightPanels: [
+                '@ohif/extension-cornerstone.panelModule.panelSegmentation',
+                '@ohif/extension-measurement-tracking.panelModule.trackedMeasurements',
+              ],
+              rightPanelClosed: true,
+              viewports: [
+                {
+                  namespace:
+                    '@ohif/extension-measurement-tracking.viewportModule.cornerstone-tracked',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-default.sopClassHandlerModule.stack',
+                    '@ohif/extension-dicom-video.sopClassHandlerModule.dicom-video',
+                    '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr-3d',
+                    '@ohif/extension-cornerstone.sopClassHandlerModule.DicomMicroscopySopClassHandler',
+                  ],
+                },
+                {
+                  namespace: '@ohif/extension-cornerstone-dicom-sr.viewportModule.dicom-sr',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-cornerstone-dicom-sr.sopClassHandlerModule.dicom-sr',
+                  ],
+                },
+                {
+                  namespace: '@ohif/extension-dicom-pdf.viewportModule.dicom-pdf',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-dicom-pdf.sopClassHandlerModule.dicom-pdf',
+                  ],
+                },
+                {
+                  namespace: '@ohif/extension-cornerstone-dicom-seg.viewportModule.dicom-seg',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-cornerstone-dicom-seg.sopClassHandlerModule.dicom-seg',
+                  ],
+                },
+                {
+                  namespace: '@ohif/extension-cornerstone-dicom-pmap.viewportModule.dicom-pmap',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-cornerstone-dicom-pmap.sopClassHandlerModule.dicom-pmap',
+                  ],
+                },
+                {
+                  namespace: '@ohif/extension-cornerstone-dicom-rt.viewportModule.dicom-rt',
+                  displaySetsToDisplay: [
+                    '@ohif/extension-cornerstone-dicom-rt.sopClassHandlerModule.dicom-rt',
+                  ],
+                },
+              ],
+            },
+          }),
+        },
+      ],
+    },
+  },
   customizationService: {},
-  showStudyList: true,
-  investigationalUseDialog: 'never',
+  showStudyList: false,
+  investigationalUseDialog: { option: 'never' },
+  // 'disabled' | 'visible' | 'visibleCollapsed' | 'visibleReadOnly'
+  showPatientInfo: 'disabled',
   // some windows systems have issues with more than 3 web workers
   maxNumberOfWebWorkers: 3,
   // below flag is for performance reasons, but it might not work for all servers
@@ -364,6 +442,111 @@ window.config = {
     },
   ],
 };
+
+/*
+  Narrow-screen toolbar (ohif/app:v3.9.2), down to a 320px viewport.
+
+  The header row is `relative h-[48px]` holding four absolutely positioned
+  groups: the logo at left-0, an empty secondary toolbar at a hard-coded
+  left-[250px], the primary toolbar centred with `left-1/2 -translate-x-1/2`,
+  and the patient info + settings menu at right-0.
+
+  Absolute positioning means the centred toolbar sizes to its content, so on a
+  phone it runs underneath the settings menu and its last buttons cannot be
+  tapped. This version has no toolbar option in app-config (`toolbarSections`
+  arrives in a later release), so below 640px the row becomes an ordinary flex
+  layout: the toolbar takes whatever width is left over from the settings menu
+  and scrolls horizontally. Using flex rather than a fixed right-hand reserve
+  keeps it correct at 320px, where a guessed offset would be a few pixels out.
+
+  The 48px header height is untouched — the viewport is sized as
+  `calc(100vh - 52px)` and depends on it.
+
+  Selectors use [class*=] to avoid escaping Tailwind's bracketed class names,
+  and are tied to this OHIF version's markup — re-check them on an upgrade.
+*/
+(function addNarrowScreenToolbarStyles() {
+  var row = 'div[class*="h-[48px]"]';
+  var toolbar = row + ' > div[class*="left-1/2"]';
+  var style = document.createElement('style');
+  style.textContent = [
+    '@media (max-width: 640px) {',
+    '  ' + row + ' {',
+    '    display: flex;',
+    '    align-items: center;',
+    '  }',
+    '  ' + row + ' > div[class*="absolute"] {',
+    '    position: static;',
+    '    transform: none;',
+    '  }',
+    // The logo group is empty (whiteLabeling) and so is the secondary section,
+    // but both still occupy width in a flex row.
+    '  ' + row + ' > div[class*="left-0"],',
+    '  ' + row + ' > div[class*="left-[250px]"] {',
+    '    display: none;',
+    '  }',
+    '  ' + toolbar + ' {',
+    '    flex: 1 1 auto;',
+    '    min-width: 0;',
+    '    overflow-x: auto;',
+    '    overflow-y: hidden;',
+    '    scrollbar-width: none;',
+    '    -ms-overflow-style: none;',
+    '  }',
+    '  ' + toolbar + '::-webkit-scrollbar { display: none; }',
+    // max-content lets the button row exceed the strip so it scrolls
+    // instead of being squeezed.
+    '  ' + toolbar + ' > div {',
+    '    width: max-content;',
+    '    justify-content: flex-start;',
+    '  }',
+    '  ' + row + ' div[class*="gap-[4px]"] {',
+    '    justify-content: flex-start;',
+    '    min-width: 0;',
+    '  }',
+    '  ' + row + ' > div[class*="right-0"] {',
+    '    flex: 0 0 auto;',
+    '  }',
+    '}',
+    // Collapsed side panels: SidePanel keeps a closed panel at its full
+    // expanded width and hides it behind a negative margin, leaving a ~29px
+    // strip with a 28px reveal bar and 22px icons — under the ~44px touch
+    // target. Give the closed panel an explicit 44px box instead of adjusting
+    // the margin, so nothing depends on the panel's expanded width. The
+    // :has() only matches the closed state, so opening a panel restores its
+    // own inline width.
+    '@media (max-width: 640px) {',
+    '  div:has(> [data-cy="side-panel-header-right"]) {',
+    '    width: 44px !important;',
+    '    max-width: 44px !important;',
+    '    margin-right: 0 !important;',
+    '  }',
+    '  div:has(> [data-cy="side-panel-header-left"]) {',
+    '    width: 44px !important;',
+    '    max-width: 44px !important;',
+    '    margin-left: 0 !important;',
+    '  }',
+    '  [data-cy^="side-panel-header-"] {',
+    '    min-height: 44px !important;',
+    '    justify-content: center !important;',
+    '    padding-left: 0 !important;',
+    '    padding-right: 0 !important;',
+    '  }',
+    '  [data-cy^="side-panel-header-"] + div > * {',
+    '    display: flex;',
+    '    align-items: center;',
+    '    justify-content: center;',
+    '    min-height: 44px;',
+    '    width: 100%;',
+    '  }',
+    '  [data-cy^="side-panel-header-"] + div [data-cy$="-btn"] svg {',
+    '    width: 26px !important;',
+    '    height: 26px !important;',
+    '  }',
+    '}',
+  ].join('\n');
+  document.head.appendChild(style);
+})();
 
 function waitForElement(selector, maxAttempts = 20, interval = 25) {
   return new Promise(resolve => {
