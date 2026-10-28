@@ -83,7 +83,7 @@ paths:
         worklist.
 
         With `calling_ae_title`, CARE finds the facility's active, available modality device
-        whose `calling_ae_title` matches, takes its `current_location`, and returns only the
+        whose `machine.ae_title` matches, takes its `current_location`, and returns only the
         requests whose `activity_definition.locations` include that location. Each entry then
         lists only that location, as with `modality`. The DICOM Enabler passes the C-FIND's
         `Association.CallingAE` straight through. An AE title no such device has, or a device
@@ -101,7 +101,7 @@ paths:
           description: |
             Filter by the AE title the machine sent as Calling AE (case-insensitive): only
             service requests whose `activity_definition.locations` include the `current_location`
-            of the facility's active, available modality device with this `calling_ae_title`
+            of the facility's active, available modality device with this `machine.ae_title`
           schema:
             type: string
             maxLength: 16
@@ -1927,6 +1927,26 @@ components:
           maximum: 65535
           example: 2007
 
+    MachineEndpoint:
+      type: object
+      required: [ae_title]
+      properties:
+        ae_title:
+          type: string
+          maxLength: 16
+          description: |
+            AE title the machine sends as Calling AE. The DICOM Enabler matches
+            `Association.CallingAE` against it to find the device. Unique among the facility's
+            active modality devices.
+          example: CT1
+        ip:
+          type: string
+          nullable: true
+          description: |
+            IP address the machine connects from. The DICOM Enabler can check it against the
+            association's peer address. Null when not configured.
+          example: 192.168.1.45
+
     ModalityListItem:
       type: object
       description: Summary of a modality device, as returned by the list.
@@ -1934,7 +1954,7 @@ components:
         - id
         - device_name
         - modality_code
-        - calling_ae_title
+        - machine
         - location
         - device_status
         - assignment_status
@@ -1953,14 +1973,12 @@ components:
             DICOM modality code of the machine, as sent in Modality (0008,0060), e.g. `CT`, `MR`,
             `DX`, `CR`, `US`, `MG`, `XA`, `NM`.
           example: CT
-        calling_ae_title:
-          type: string
-          maxLength: 16
+        machine:
           description: |
-            AE title the machine sends as Calling AE when it queries the worklist (C-FIND) or
-            reports MPPS. The DICOM Enabler matches `Association.CallingAE` against it to find
-            the device. Unique among the facility's active modality devices.
-          example: CT1
+            The machine as a caller: the AE title and IP it uses when it queries the worklist
+            (C-FIND) or reports MPPS. Separate from `store_scp` / `modality_scp`.
+          allOf:
+            - $ref: '#/components/schemas/MachineEndpoint'
         location:
           type: object
           nullable: true
