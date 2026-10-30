@@ -4,6 +4,12 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
+def clear_accession_sequences(apps, schema_editor):
+    # Old counters are keyed by modality code, which has no mapping to resource category.
+    AccessionSequence = apps.get_model("care_radiology", "AccessionSequence")
+    AccessionSequence.objects.all().delete()
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -13,10 +19,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            "DELETE FROM care_radiology_accessionsequence;",
-            migrations.RunSQL.noop,
-        ),
+        migrations.RunPython(clear_accession_sequences, migrations.RunPython.noop),
         migrations.RemoveConstraint(
             model_name='accessionsequence',
             name='uniq_facility_modality_year',
