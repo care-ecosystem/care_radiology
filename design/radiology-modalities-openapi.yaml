@@ -415,16 +415,17 @@ paths:
         Called by the DICOM Enabler (Modality Emulator) to show the facility's modality devices
         (`care_type: modality`, one per machine) and Modality Enablers
         (`care_type: modality_enabler`, one per DICOM Enabler, usually per room). Every modality
-        device connects to one Modality Enabler through its `modality_enabler`, so a single DICOM
-        Enabler serves all the machines of a room.
+        device connects to one or more Modality Enablers through its `modality_enablers`, so a
+        single DICOM Enabler serves all the machines of a room, and a machine can be served by
+        more than one DICOM Enabler.
 
         Lists the devices of both types whose `status` is `active` and `availability_status` is
         `available`, including those already assigned; `device_type` limits it to one type and
         `assignment_status` to assigned or unassigned devices.
         Each entry carries the device's summary, its `device_type` and its `assignment_status`;
         the fields of the other type are null. Every modality device and Modality Enabler is
-        its own entry; a modality device points to its enabler only by the id in
-        `modality_enabler`. The DICOM endpoints of a Modality Enabler are returned by the
+        its own entry; a modality device points to its enablers only by the ids in
+        `modality_enablers`. The DICOM endpoints of a Modality Enabler are returned by the
         retrieve.
 
         Flow:
@@ -469,7 +470,7 @@ paths:
           description: |
             Modality devices and Modality Enablers of the facility, narrowed by the filters
             given. Each item's `device_type` says which fields are set: `machine` and
-            `modality_enabler` for a modality device, `ip` for a Modality Enabler; the others
+            `modality_enablers` for a modality device, `ip` for a Modality Enabler; the others
             are null. Pick an example to see the response for each filter.
           content:
             application/json:
@@ -492,7 +493,7 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         machine: null
-                        modality_enabler: null
+                        modality_enablers: null
                         ip: 192.168.1.40
                       - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
                         device_name: Siemens SOMATOM CT
@@ -508,7 +509,9 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        modality_enablers:
+                          - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                          - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
                         ip: null
                 modality_enablers:
                   summary: device_type=modality_enabler
@@ -526,7 +529,7 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         machine: null
-                        modality_enabler: null
+                        modality_enablers: null
                         ip: 192.168.1.40
                 modality_devices:
                   summary: device_type=modality
@@ -547,7 +550,9 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        modality_enablers:
+                          - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                          - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
                         ip: null
                 unassigned_modality_enablers:
                   summary: device_type=modality_enabler&assignment_status=unassigned
@@ -565,7 +570,7 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         machine: null
-                        modality_enabler: null
+                        modality_enablers: null
                         ip: 192.168.1.40
                 assigned:
                   summary: assignment_status=assigned - both device types
@@ -586,7 +591,9 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        modality_enablers:
+                          - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                          - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
                         ip: null
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -622,11 +629,62 @@ paths:
         - $ref: '#/components/parameters/DeviceId'
       responses:
         '200':
-          description: Device details. `assignment_status` is always `unassigned`.
+          description: |
+            Device details. `assignment_status` is always `unassigned`. A Modality Enabler
+            carries its `ip`, `store_scp` and `modality_scp`; a modality device carries its
+            `machine` and `modality_enablers`. Pick an example to see each.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Modality'
+              examples:
+                modality_enabler:
+                  summary: Modality Enabler
+                  value:
+                    id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    device_name: CT Room 1 Enabler
+                    device_type: modality_enabler
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    machine: null
+                    modality_enablers: null
+                    ip: 192.168.1.40
+                    store_scp:
+                      ae_title: CT_STORE_SCP
+                      host: 192.168.1.40
+                      port: 2007
+                    modality_scp:
+                      ae_title: CT_MWL_SCP
+                      host: 192.168.1.40
+                      port: 2008
+                modality:
+                  summary: Modality device
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    device_name: Siemens SOMATOM CT
+                    device_type: modality
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    machine:
+                      ae_title: CT1
+                      modality: CT
+                      ip: 192.168.1.45
+                    modality_enablers:
+                      - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                      - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
+                    ip: null
+                    store_scp: null
+                    modality_scp: null
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2146,16 +2204,23 @@ components:
         Sent at the top level of the body of the CARE device create / update API
         (`/api/v1/facility/{facility_id}/device/`), and returned as `care_metadata` by its
         list and retrieve.
-      required: [machine, modality_enabler]
+      required: [machine, modality_enablers]
       properties:
         machine:
           $ref: '#/components/schemas/MachineEndpoint'
-        modality_enabler:
-          type: string
-          format: uuid
+        modality_enablers:
+          type: array
+          minItems: 1
+          uniqueItems: true
           description: |
-            external_id of the Modality Enabler (`care_type: modality_enabler`) of the same
-            facility the machine connects to. An id that is not one returns `400`.
+            external_ids of the Modality Enablers (`care_type: modality_enabler`) of the same
+            facility the machine connects to; at least one. An id that is not one returns `400`.
+          items:
+            type: string
+            format: uuid
+          example:
+            - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+            - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
         assignment_status:
           type: string
           readOnly: true
@@ -2238,12 +2303,18 @@ components:
             when it queries the worklist (C-FIND) or reports MPPS.
           allOf:
             - $ref: '#/components/schemas/MachineEndpoint'
-        modality_enabler:
-          type: string
-          format: uuid
+        modality_enablers:
+          type: array
           nullable: true
-          description: Modality device only. external_id of the Modality Enabler it connects to.
-          example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+          description: |
+            Modality device only. external_ids of the Modality Enablers it connects to; one or
+            more.
+          items:
+            type: string
+            format: uuid
+          example:
+            - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+            - 9b2d4e6f-8a1c-4b3d-a5e7-c9f1b3d5e7a9
         ip:
           type: string
           nullable: true
