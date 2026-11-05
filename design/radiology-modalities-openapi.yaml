@@ -83,26 +83,22 @@ paths:
       summary: Get modality worklist
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
-        DICOM modality worklist. Optionally filter by the calling machine's AE title
-        (`calling_ae_title`), location name (`modality`) or date range (`created_date_after`,
-        `created_date_before`). Any further filtering is done by the DICOM Enabler itself.
+        DICOM modality worklist. Optionally filter by the DICOM modality code of a device
+        (`modality`), the location (room) name (`location`) or date range
+        (`created_date_after`, `created_date_before`). When several are given, all apply. Any
+        further filtering is done by the DICOM Enabler itself.
 
-        Each entry carries the `accession_number` from `ImagingStudy`, and the `locations` of the
-        service request's `activity_definition.locations`, each with the `devices` whose
-        `current_location` it is. With `modality`, only requests that include a location of that
-        name are returned, and each lists only that location, with all its devices: every device
-        in a location shares the same worklist. Devices are fetched in one query for the whole
-        worklist.
+        Each entry carries the `accession_number` from `ImagingStudy`, the
+        `referring_physician` who raised the service request, and the `locations` of the
+        service request's `activity_definition.locations`. Each location lists all the DICOM
+        devices (`care_type: dicom`) whose `current_location` it is, by their registered name:
+        every device in a location shares the same worklist. Devices are fetched in one query
+        for the whole worklist.
 
-        With `calling_ae_title`, CARE finds the facility's active, available DICOM device
-        whose `machine.ae_title` matches, takes its `current_location`, and returns only the
-        requests whose `activity_definition.locations` include that location. Each entry then
-        lists only that location, as with `modality`. The DICOM Enabler passes the C-FIND's
-        `Association.CallingAE` straight through. An AE title no such device has, or a device
-        with no location, returns `404` instead of the full worklist.
-
-        `modality` is kept for Enablers that are configured with a room name. When both are
-        given, both apply.
+        - With `modality`, only requests that include a location holding a DICOM device whose
+          `machine.modality` is that code are returned, and each lists only those locations.
+        - With `location`, only requests that include a location of that name are returned, and
+          each lists only that location.
 
         Requires a service account token (Authorization: Token <key>) with
         `can_read_radiology_data` on the facility.
@@ -111,20 +107,19 @@ paths:
         - ServiceAccountToken: []
       parameters:
         - $ref: '#/components/parameters/FacilityId'
-        - name: calling_ae_title
-          in: query
-          description: |
-            Filter by the AE title the machine sent as Calling AE (case-insensitive): only
-            service requests whose `activity_definition.locations` include the `current_location`
-            of the facility's active, available DICOM device with this `machine.ae_title`
-          schema:
-            type: string
-            maxLength: 16
-            example: "CT1"
         - name: modality
           in: query
           description: |
-            Filter by location name (case-insensitive): only service requests whose
+            Filter by DICOM modality code: only service requests whose
+            `activity_definition.locations` include a location holding a DICOM device of the
+            facility whose `machine.modality` (set when the DICOM device is created) is this code
+          schema:
+            type: string
+            example: "CT"
+        - name: location
+          in: query
+          description: |
+            Filter by location (room) name (case-insensitive): only service requests whose
             `activity_definition.locations` include a location of the facility with this name
           schema:
             type: string
@@ -166,29 +161,15 @@ paths:
         '403':
           $ref: '#/components/responses/ServiceAccountForbidden'
         '404':
-          description: |
-            The given facility does not exist, or `calling_ae_title` matches no active, available
-            DICOM device of the facility, or that device has no location
+          description: The given facility does not exist
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-              examples:
-                facility_not_found:
-                  value:
-                    errors:
-                      - type: "object_not_found"
-                        msg: "No Facility matches the given query."
-                device_not_found:
-                  value:
-                    errors:
-                      - type: "object_not_found"
-                        msg: "No Device matches the given query."
-                device_without_location:
-                  value:
-                    errors:
-                      - type: "object_not_found"
-                        msg: "Device has no location."
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Facility matches the given query."
 
   /api/care_radiology/facility/{facility_id}/external/imaging_study/upload/:
     post:
@@ -438,7 +419,7 @@ paths:
         Called by the DICOM Enabler (Modality Emulator) to show the facility's DICOM Enablers
         (`care_type: dicom_enabler`, one per DICOM Enabler, usually per room) and DICOM devices
         (`care_type: dicom`, one per modality machine). Every DICOM device connects to exactly
-        one DICOM Enabler through its `modality` field, so a single DICOM Enabler serves all the
+        one DICOM Enabler through its `dicom_enabler` field, so a single DICOM Enabler serves all the
         machines of a room.
 
         Lists the devices of both types whose `status` is `active` and `availability_status` is
@@ -497,7 +478,7 @@ paths:
           required: false
           description: |
             external_id of a DICOM Enabler of the facility. Returns that DICOM Enabler and the
-            DICOM devices whose `modality` is this id. Use it with `care_type=dicom` to get only the
+            DICOM devices whose `dicom_enabler` is this id. Use it with `care_type=dicom` to get only the
             devices connected to the enabler.
           schema:
             type: string
@@ -509,7 +490,7 @@ paths:
         '200':
           description: |
             DICOM Enablers and DICOM devices of the facility, narrowed by the filters given. Each
-            item's `device_type` says which fields are set: `machine` and `modality` for a DICOM
+            item's `device_type` says which fields are set: `machine` and `dicom_enabler` for a DICOM
             device, `ip` and `dicom_count` for a DICOM Enabler; the others are left out. Pick an
             example to see the response for each filter.
           content:
@@ -548,7 +529,7 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
                 dicom_enablers:
                   summary: care_type=dicom_enabler
                   value:
@@ -585,7 +566,7 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
                 unassigned_dicom_enablers:
                   summary: care_type=dicom_enabler&assignment_status=unassigned
                   value:
@@ -622,7 +603,7 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
                 devices_of_dicom_enabler:
                   summary: dicom_enabler={id}&care_type=dicom - devices connected to one DICOM Enabler
                   value:
@@ -642,7 +623,7 @@ paths:
                           ae_title: CT1
                           modality: CT
                           ip: 192.168.1.45
-                        modality: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -682,7 +663,7 @@ paths:
           description: |
             Device details. `assignment_status` is always `unassigned`. A DICOM Enabler carries
             its `ip`, `dicom_count`, `store_scp` and `modality_scp`; a DICOM device carries its
-            `machine` (with `scheduled_station_ae_title`) and `modality`. Pick an example to see
+            `machine` (with `scheduled_station_ae_title`) and `dicom_enabler`. Pick an example to see
             each.
           content:
             application/json:
@@ -730,7 +711,7 @@ paths:
                       modality: CT
                       scheduled_station_ae_title: CT Scan 1
                       ip: 192.168.1.45
-                    modality: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1625,6 +1606,11 @@ components:
             body_site:
               type: string
               description: Name of the activity/procedure
+            body_site_id:
+              type: string
+              nullable: true
+              description: Code of the service request's `body_site`, as `procedure_id` is for the procedure
+              example: "39607008"
             procedure_id:
               type: string
               description: Name of the activity/procedure
@@ -1643,14 +1629,21 @@ components:
               format: date-time
             accession_number:
               type: string
-              nullable: true
+              nullable: false
               description: From ImagingStudy.accession_number
               example: "ACJAYCTO26000004"
+            referring_physician:
+              type: string
+              nullable: false
+              description: |
+                Full name of the doctor who raised the service request (its `requester`), for
+                Referring Physician's Name (0008,0090). Null when the request has no requester.
+              example: "Dr. Anjali Menon"
         locations:
           type: array
           description: |
-            activities whose current_location is one of the service request's
-            activity_definition.locations
+            The service request's `activity_definition.locations`, each with the DICOM devices
+            whose `current_location` it is
           items:
             $ref: '#/components/schemas/locations'
         facility:
@@ -1691,19 +1684,23 @@ components:
         name:
           type: string
           nullable: true
-          example: "CT"
+          description: Name of the location (room)
+          example: "CT Room 1"
         devices:
           type: array
+          description: |
+            All DICOM devices (`care_type: dicom`) whose `current_location` is this location
           items:
             type: object
-            properties: 
+            properties:
                 id:
                   type: string
                   format: uuid
                   description: Device external_id
                 name:
                   type: string
-                  nullable: true
+                  description: |
+                    Registered name of the DICOM device, unique within the facility
                   example: "CT IMX001"
 
     # ===================== Imaging Study =====================
@@ -2263,11 +2260,11 @@ components:
         Sent at the top level of the body of the CARE device create / update API
         (`/api/v1/facility/{facility_id}/device/`), and returned as `care_metadata` by its
         list and retrieve.
-      required: [machine, modality]
+      required: [machine, dicom_enabler]
       properties:
         machine:
           $ref: '#/components/schemas/MachineEndpoint'
-        modality:
+        dicom_enabler:
           type: string
           format: uuid
           description: |
@@ -2367,7 +2364,7 @@ components:
             is returned by the retrieve only.
           allOf:
             - $ref: '#/components/schemas/MachineEndpoint'
-        modality:
+        dicom_enabler:
           type: string
           format: uuid
           description: DICOM device only. external_id of the one DICOM Enabler it connects to.
@@ -2380,7 +2377,7 @@ components:
           type: integer
           minimum: 0
           description: |
-            DICOM Enabler only. Number of `active`, `available` DICOM devices whose `modality` is
+            DICOM Enabler only. Number of `active`, `available` DICOM devices whose `dicom_enabler` is
             this enabler.
           example: 1
 
