@@ -68,11 +68,13 @@ class DicomEndpointSpec(BaseModel):
     port: int = Field(ge=1, le=65535)
 
 
+AssignmentStatus = Literal["unassigned", "assigned"]
+
+
 class DicomDeviceMetadataWriteSpec(BaseModel):
     machine: ModalityMachineSpec
     dicom_enabler: UUID4
-
-AssignmentStatus = Literal["unassigned", "assigned"]
+    assignment_status: AssignmentStatus | None = None
 
 
 class DicomDeviceMetadataReadSpec(BaseModel):
@@ -85,6 +87,7 @@ class DicomEnablerMetadataWriteSpec(BaseModel):
     ip: IPvAnyAddress
     store_scp: DicomEndpointSpec
     modality_scp: DicomEndpointSpec
+    assignment_status: AssignmentStatus | None = None
 
 
 class DicomEnablerMetadataReadSpec(BaseModel):
