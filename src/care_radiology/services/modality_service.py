@@ -2,6 +2,7 @@ import uuid
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
 
@@ -113,6 +114,7 @@ def update_modality_assignment_status(*, facility, device_id, assignment_status)
     """
     Sets the assignment_status of a DICOM Enabler or DICOM device of the facility. A 404 when it is not
     one; a 409 when it already has that status, or when assigning a device that is not active and available.
+    Every status change through here also sets last_synced_at to now.
     """
     with transaction.atomic():
         device = get_object_or_404(
@@ -125,7 +127,11 @@ def update_modality_assignment_status(*, facility, device_id, assignment_status)
             raise AssignmentConflict(f"Device is already {assignment_status}.")
         if assignment_status == ASSIGNMENT_STATUS_ASSIGNED and not is_active_available(device):
             raise AssignmentConflict("Device is not active and available.")
-        device.metadata = {**(device.metadata or {}), "assignment_status": assignment_status}
+        device.metadata = {
+            **(device.metadata or {}),
+            "assignment_status": assignment_status,
+            "last_synced_at": timezone.now().isoformat(),
+        }
         device.save(update_fields=["metadata"])
     return device
 
@@ -147,6 +153,7 @@ def modality_list_item(device):
             "availability_status": device.availability_status,
         },
         "assignment_status": assignment_status_of(device),
+        "last_synced_at": metadata.get("last_synced_at"),
     }
     # The fields of the other device type are left out, not returned as null.
     if device.care_type == DICOM_CARE_TYPE:

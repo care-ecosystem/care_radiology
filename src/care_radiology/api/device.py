@@ -43,6 +43,9 @@ def resolve_assignment_status(obj, requested, is_create):
 def write_metadata(obj, validated_data, is_create):
     metadata = validated_data.model_dump(mode="json")
     metadata["assignment_status"] = resolve_assignment_status(obj, validated_data.assignment_status, is_create)
+    last_synced_at = None if is_create else (obj.metadata or {}).get("last_synced_at")
+    if last_synced_at:
+        metadata["last_synced_at"] = last_synced_at
     obj.metadata = metadata
     obj.save(update_fields=["metadata"])
     return obj

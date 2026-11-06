@@ -72,7 +72,7 @@ paths:
       summary: Get modality worklist
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
-        DICOM modality worklist. Optionally filter by DICOM Enabler (`dicom_enabler`) or date
+        DICOM modality worklist. Optionally filter by DICOM Enabler (`device`) or date
         range (`created_date_after`, `created_date_before`). When several are given, all apply.
         Any further filtering, such as by modality, is done by the DICOM Enabler itself.
 
@@ -84,7 +84,7 @@ paths:
         shares the same worklist. Devices are fetched in one query
         for the whole worklist.
 
-        With `dicom_enabler`, the worklist is that DICOM Enabler's: its locations are the
+        With `device`, the worklist is that DICOM Enabler's: its locations are the
         `current_location` of every `active`, `available` DICOM device whose `dicom_enabler` is
         this id. The DICOM Enabler's own `current_location` is not used. Only requests that
         include at least one of these locations are returned; each lists only these locations,
@@ -121,7 +121,7 @@ paths:
         - StaticApiKey: []
       parameters:
         - $ref: '#/components/parameters/FacilityId'
-        - name: dicom_enabler
+        - name: device
           in: query
           required: false
           description: |
@@ -168,26 +168,26 @@ paths:
                       $ref: '#/components/schemas/WorklistEntry'
         '400':
           description: |
-            `dicom_enabler` is not a valid UUID, or not the id of a DICOM Enabler of the facility.
+            `device` is not a valid UUID, or not the id of a DICOM Enabler of the facility.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
               examples:
-                dicom_enabler_invalid:
-                  summary: dicom_enabler is not a valid UUID
+                device_invalid:
+                  summary: device is not a valid UUID
                   value:
                     errors:
                       - type: "validation_error"
                         msg:
-                          dicom_enabler: "Must be a valid DICOM Enabler id."
-                dicom_enabler_not_found:
-                  summary: dicom_enabler is not a DICOM Enabler of the facility
+                          device: "Must be a valid DICOM Enabler id."
+                device_not_found:
+                  summary: device is not a DICOM Enabler of the facility
                   value:
                     errors:
                       - type: "validation_error"
                         msg:
-                          dicom_enabler: "No DICOM Enabler with this id in the facility."
+                          device: "No DICOM Enabler with this id in the facility."
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -539,6 +539,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: unassigned
+                        last_synced_at: null
                         ip: 192.168.1.40
                       - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
                         device_name: Siemens SOMATOM CT
@@ -550,6 +551,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                         machine:
                           ae_title: CT1
                           modality: CT
@@ -570,6 +572,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: unassigned
+                        last_synced_at: null
                         ip: 192.168.1.40
                 dicom_devices:
                   summary: care_type=dicom
@@ -586,6 +589,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                         machine:
                           ae_title: CT1
                           modality: CT
@@ -606,6 +610,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: unassigned
+                        last_synced_at: null
                         ip: 192.168.1.40
                 assigned:
                   summary: assignment_status=assigned - both device types
@@ -622,6 +627,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                         machine:
                           ae_title: CT1
                           modality: CT
@@ -642,6 +648,7 @@ paths:
                           status: active
                           availability_status: available
                         assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                         machine:
                           ae_title: CT1
                           modality: CT
@@ -746,6 +753,7 @@ paths:
                       status: active
                       availability_status: available
                     assignment_status: unassigned
+                    last_synced_at: null
                     ip: 192.168.1.40
                 dicom:
                   summary: DICOM device
@@ -760,6 +768,7 @@ paths:
                       status: active
                       availability_status: available
                     assignment_status: unassigned
+                    last_synced_at: null
                     machine:
                       ae_title: CT1
                       modality: CT
@@ -837,6 +846,11 @@ paths:
         Setting the status the device already has returns `409`, through this endpoint and
         through the CARE device API.
 
+        Every status change through this endpoint, to `assigned` or to `unassigned`, also sets
+        `last_synced_at` to the current time, so it is the time of the last sync. A `409` changes
+        nothing. A device whose status has never been changed through this endpoint has
+        `last_synced_at: null`. Changing the status through the CARE device API does not change it.
+
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
       operationId: updateModalityStatus
@@ -891,6 +905,7 @@ paths:
                       status: active
                       availability_status: available
                     assignment_status: assigned
+                    last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                     ip: 192.168.1.40
                 dicom_unassigned:
                   summary: DICOM device unassigned
@@ -905,6 +920,7 @@ paths:
                       status: active
                       availability_status: available
                     assignment_status: unassigned
+                    last_synced_at: "2026-11-06T09:15:30.123456+00:00"
                     machine:
                       ae_title: CT1
                       modality: CT
@@ -1826,7 +1842,7 @@ components:
           type: array
           description: |
             All DICOM devices (`care_type: dicom`) whose `current_location` is this location;
-            with the `dicom_enabler` filter, only those connected to that DICOM Enabler.
+            with the `device` filter, only those connected to that DICOM Enabler.
           items:
             type: object
             properties:
@@ -2424,6 +2440,17 @@ components:
             `available` device can be set to `assigned`, otherwise `400`. Also changed with
             `PATCH .../external/modalities/{device_id}/status/`.
           enum: [unassigned, assigned]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            Read only: set to the current time on every status change (to `assigned` or
+            `unassigned`) with `PATCH .../external/modalities/{device_id}/status/`. Ignored when
+            sent on device create / update, which keeps the current value. Null when its status
+            has never been changed that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
 
     DicomEnablerDeviceMetadata:
       type: object
@@ -2476,6 +2503,17 @@ components:
             `available` device can be set to `assigned`, otherwise `400`. Also changed with
             `PATCH .../external/modalities/{device_id}/status/`.
           enum: [unassigned, assigned]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            Read only: set to the current time on every status change (to `assigned` or
+            `unassigned`) with `PATCH .../external/modalities/{device_id}/status/`. Ignored when
+            sent on device create / update, which keeps the current value. Null when its status
+            has never been changed that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
 
     ModalityListItem:
       type: object
@@ -2489,6 +2527,7 @@ components:
         - location
         - device_status
         - assignment_status
+        - last_synced_at
       properties:
         id:
           type: string
@@ -2515,6 +2554,14 @@ components:
             `PATCH .../{device_id}/status/`.
           enum: [unassigned, assigned]
           example: unassigned
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When the device's status was last changed (to `assigned` or `unassigned`) with
+            `PATCH .../{device_id}/status/`. Null when it has never been changed that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
         machine:
           description: |
             DICOM device only. The machine as a caller: the AE title, modality and IP it uses

@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -79,6 +80,7 @@ class DicomDeviceMetadataReadSpec(BaseModel):
     machine: ModalityMachineSpec | None = None
     dicom_enabler: UUID4 | None = None
     assignment_status: AssignmentStatus | None = None
+    last_synced_at: datetime | None = None
 
 
 class DicomEnablerMetadataWriteSpec(BaseModel):
@@ -93,6 +95,7 @@ class DicomEnablerMetadataReadSpec(BaseModel):
     store_scp: DicomEndpointSpec | None = None
     modality_scp: DicomEndpointSpec | None = None
     assignment_status: AssignmentStatus | None = None
+    last_synced_at: datetime | None = None
 
 
 class ModalityListQuerySpec(BaseModel):
