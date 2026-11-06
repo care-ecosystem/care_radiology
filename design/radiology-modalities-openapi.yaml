@@ -450,6 +450,8 @@ paths:
             Optional. external_id of a DICOM Enabler of the facility. Returns only the DICOM
             devices (`care_type: dicom`) whose `dicom_enabler` is this id; the DICOM Enabler itself
             is not included. Combined with `care_type=dicom_enabler` it returns no devices.
+            Returns `400` when it is not a valid UUID, or not the id of a DICOM Enabler of the
+            facility.
           schema:
             type: string
             format: uuid
@@ -592,11 +594,47 @@ paths:
                           ip: 192.168.1.45
                         dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: |
+            `care_type` or `assignment_status` is not one of the allowed values, or `dicom_enabler`
+            is not a valid UUID or not the id of a DICOM Enabler of the facility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                dicom_enabler_invalid:
+                  summary: dicom_enabler is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "Must be a valid DICOM Enabler id."
+                dicom_enabler_not_found:
+                  summary: dicom_enabler is not a DICOM Enabler of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "No DICOM Enabler with this id in the facility."
+                invalid_care_type:
+                  summary: care_type is not an allowed value
+                  value:
+                    errors:
+                      - type: "literal_error"
+                        loc: ["care_type"]
+                        msg: "Input should be 'dicom_enabler' or 'dicom'"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: The given facility does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Facility matches the given query."
 
   /api/care_radiology/facility/{facility_id}/external/modalities/{device_id}/:
     get:
