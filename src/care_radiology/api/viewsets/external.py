@@ -22,7 +22,12 @@ from care_radiology.services.dicom_service import (
     process_mpps_webhook,
     read_file_accession_number,
 )
-from care_radiology.services.modality_service import get_modalities, modality_list_items
+from care_radiology.services.modality_service import (
+    get_modalities,
+    get_modality,
+    modality_detail,
+    modality_list_items,
+)
 from care_radiology.services.worklist_service import get_service_requests, worklist_entries
 from care_radiology.utils.dicom import parse_date
 
@@ -75,6 +80,12 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         paginator = CareLimitOffsetPagination()
         page = paginator.paginate_queryset(devices, request, view=self)
         return paginator.get_paginated_response(modality_list_items(page))
+
+    # One unassigned DICOM Enabler or DICOM device, with its DICOM endpoints or Scheduled Station AE Title.
+    @action(detail=False, methods=["get"], url_path=r"modalities/(?P<device_id>[^/.]+)", url_name="modality-detail")
+    def retrieve_modality(self, request, device_id, *args, **kwargs):
+        device = get_modality(facility=self.get_facility(), device_id=device_id)
+        return Response(modality_detail(device), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="imaging_study/upload")
     def upload(self, request, *args, **kwargs):
