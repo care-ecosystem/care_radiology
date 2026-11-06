@@ -648,10 +648,10 @@ paths:
         The DICOM devices connected to an enabler are separate devices and are not included;
         list them with `GET .../external/modalities/?dicom_enabler={device_id}`.
 
-        Only devices that are `active`, `available` and not assigned can be retrieved. A device
-        whose `assignment_status` is `assigned`, or whose `status` is not `active` or
-        `availability_status` is not `available`, returns `404`, as does an id that is neither
-        a DICOM Enabler nor a DICOM device of the facility.
+        Only devices that are `active`, `available` and not assigned can be retrieved. Any other
+        `device_id` returns `400` with a message saying why: it is not a valid UUID, it is not a
+        DICOM Enabler or DICOM device of the facility, the device is not `active` / `available`,
+        or it is already assigned.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -681,12 +681,12 @@ paths:
                     device_type: dicom_enabler
                     store_scp:
                       ae_title: STORESCP
-                      ip_address: 0.0.0.0
-                      port: "2007"
+                      host: 0.0.0.0
+                      port: 2007
                     modality_scp:
                       ae_title: MODALITYSCP
-                      ip_address: 0.0.0.0
-                      port: "2008"
+                      host: 0.0.0.0
+                      port: 2008
                     location:
                       id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
                       name: CT Room 1
@@ -714,12 +714,47 @@ paths:
                       scheduled_station_ae_title: CT Scan 1
                       ip: 192.168.1.45
                     dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        '400':
+          description: |
+            `device_id` is not a valid UUID, is not a DICOM Enabler or DICOM device of the facility,
+            or the device is not `active` / `available` or is already assigned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                invalid_id:
+                  summary: device_id is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "Must be a valid device id."
+                not_found:
+                  summary: device_id is not a DICOM Enabler or DICOM device of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "No DICOM Enabler or DICOM device with this id in the facility."
+                not_available:
+                  summary: The device is not active and available
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "Device is not active and available."
+                already_assigned:
+                  summary: The device is already assigned
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "Device is already assigned."
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: |
-            Facility not found, or the device is neither a DICOM Enabler nor a DICOM device of the
-            facility, is not `active` / `available`, or is already assigned
+          description: The given facility does not exist
           content:
             application/json:
               schema:
@@ -727,7 +762,7 @@ paths:
               example:
                 errors:
                   - type: "object_not_found"
-                    msg: "No Device matches the given query."
+                    msg: "No Facility matches the given query."
 
   /api/care_radiology/facility/{facility_id}/external/modalities/{device_id}/status/:
     patch:
@@ -739,7 +774,7 @@ paths:
         is, with the `device_id` taken from the `GET .../external/modalities/` response. Called
         when the device starts or stops being used:
         - `assigned`: called after the user selects the device in the Modality Emulator. It is
-          then listed with `assignment_status: assigned` and the retrieve returns `404` for it.
+          then listed with `assignment_status: assigned` and the retrieve returns `400` for it.
           Only an `active`, `available` device can be assigned.
         - `unassigned`: called when no DICOM Enabler is using it any more, whatever its
           `status`. It is then listed with `assignment_status: unassigned` and can be retrieved
@@ -2207,15 +2242,17 @@ components:
             save; a value of only spaces is rejected. Only printable ASCII is allowed, excluding
             the backslash (`\`) and control characters.
           example: STORESCP
-        ip_address:
+        host:
           type: string
-          description: IP address the SCP listens on.
+          nullable: true
+          description: Host or IP address the SCP listens on. Null when not configured.
           example: 0.0.0.0
         port:
-          type: string
-          pattern: '^[0-9]{1,5}$'
-          description: Port the SCP listens on (1-65535).
-          example: "2007"
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port the SCP listens on.
+          example: 2007
 
     MachineEndpoint:
       type: object
@@ -2361,7 +2398,7 @@ components:
           type: string
           description: |
             Whether the device is assigned to a DICOM Enabler. `unassigned` devices can be
-            retrieved and assigned; for `assigned` ones the retrieve returns `404`. Changed with
+            retrieved and assigned; for `assigned` ones the retrieve returns `400`. Changed with
             `PATCH .../{device_id}/status/`.
           enum: [unassigned, assigned]
           example: unassigned
@@ -2398,8 +2435,8 @@ components:
                 - $ref: '#/components/schemas/DicomEndpoint'
               example:
                 ae_title: STORESCP
-                ip_address: 0.0.0.0
-                port: "2007"
+                host: 0.0.0.0
+                port: 2007
             modality_scp:
               description: |
                 DICOM Enabler only. Modality SCP - the AE title and port the modalities use to
@@ -2408,8 +2445,8 @@ components:
                 - $ref: '#/components/schemas/DicomEndpoint'
               example:
                 ae_title: MODALITYSCP
-                ip_address: 0.0.0.0
-                port: "2008"
+                host: 0.0.0.0
+                port: 2008
 
     ModalityAssignmentStatusUpdate:
       type: object
