@@ -808,13 +808,68 @@ paths:
                   assignment_status: unassigned
       responses:
         '200':
-          description: Assignment status updated; returns the device's summary.
+          description: |
+            Assignment status updated. Returns the device in the same body as the retrieve, with
+            the new `assignment_status`. A DICOM Enabler carries its `ip`, `store_scp` and
+            `modality_scp`; a DICOM device carries its `machine` (with `scheduled_station_ae_title`)
+            and `dicom_enabler`. Pick an example to see each.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ModalityListItem'
+                $ref: '#/components/schemas/Modality'
+              examples:
+                dicom_enabler_assigned:
+                  summary: DICOM Enabler assigned
+                  value:
+                    id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    device_name: CT Room 1 Enabler
+                    device_type: dicom_enabler
+                    store_scp:
+                      ae_title: STORESCP
+                      host: 0.0.0.0
+                      port: 2007
+                    modality_scp:
+                      ae_title: MODALITYSCP
+                      host: 0.0.0.0
+                      port: 2008
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: assigned
+                    ip: 192.168.1.40
+                dicom_unassigned:
+                  summary: DICOM device unassigned
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    device_name: Siemens SOMATOM CT
+                    device_type: dicom
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    machine:
+                      ae_title: CT1
+                      modality: CT
+                      scheduled_station_ae_title: CT Scan 1
+                      ip: 192.168.1.45
+                    dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: '`assignment_status` is missing or not one of the allowed values'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "literal_error"
+                    loc: ["assignment_status"]
+                    msg: "Input should be 'assigned' or 'unassigned'"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -2421,7 +2476,8 @@ components:
 
     Modality:
       description: |
-        Full details of a DICOM Enabler or DICOM device, as returned by the retrieve. The list
+        Full details of a DICOM Enabler or DICOM device, as returned by the retrieve and the
+        assignment status update. The list
         item plus, for a DICOM Enabler, the DICOM endpoints, and for a DICOM device, the
         machine's `scheduled_station_ae_title`. A DICOM device has no DICOM endpoints, and they
         are left out of its response.

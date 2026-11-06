@@ -72,10 +72,13 @@ class DicomDeviceMetadataWriteSpec(BaseModel):
     machine: ModalityMachineSpec
     dicom_enabler: UUID4
 
+AssignmentStatus = Literal["unassigned", "assigned"]
+
 
 class DicomDeviceMetadataReadSpec(BaseModel):
     machine: ModalityMachineSpec | None = None
     dicom_enabler: UUID4 | None = None
+    assignment_status: AssignmentStatus | None = None
 
 
 class DicomEnablerMetadataWriteSpec(BaseModel):
@@ -88,9 +91,14 @@ class DicomEnablerMetadataReadSpec(BaseModel):
     ip: IPvAnyAddress | None = None
     store_scp: DicomEndpointSpec | None = None
     modality_scp: DicomEndpointSpec | None = None
+    assignment_status: AssignmentStatus | None = None
 
 
 class ModalityListQuerySpec(BaseModel):
     care_type: Literal["dicom_enabler", "dicom"] | None = None
-    assignment_status: Literal["unassigned", "assigned"] | None = None
+    assignment_status: AssignmentStatus | None = None
     dicom_enabler: str | None = None
+
+
+class ModalityAssignmentStatusUpdateSpec(BaseModel):
+    assignment_status: AssignmentStatus
