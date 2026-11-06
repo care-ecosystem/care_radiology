@@ -2432,6 +2432,27 @@ components:
         Enabler (usually per room). Sent at the top level of the body of the CARE device
         create / update API, and returned as `care_metadata` by its list and retrieve. The rest
         of the device (name, status, location and so on) is the usual CARE device.
+
+        **Delete** (`DELETE /api/v1/facility/{facility_id}/device/{id}/`): a DICOM Enabler that
+        still has DICOM devices (`care_type: dicom`, not deleted) whose `dicom_enabler` is its id
+        cannot be deleted; the delete returns `400` and changes nothing. Move those DICOM devices
+        to another DICOM Enabler, or delete them, first. This keeps every DICOM device connected
+        to an existing DICOM Enabler; otherwise its every update would fail with `DICOM Enabler
+        not found in the facility`. A DICOM Enabler with no DICOM devices is deleted as usual
+        (`204`), whatever its `assignment_status`. Error body:
+
+        ```json
+        {
+          "errors": [
+            {
+              "type": "validation_error",
+              "msg": "Move or delete the DICOM devices connected to this DICOM Enabler first."
+            }
+          ]
+        }
+        ```
+
+        Deleting a DICOM device has no such check.
       required: [ip, store_scp, modality_scp]
       properties:
         ip:

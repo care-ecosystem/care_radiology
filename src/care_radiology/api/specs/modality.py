@@ -55,10 +55,8 @@ AETitle = Annotated[
 
 
 class ModalityMachineSpec(BaseModel):
-    # AE title the machine sends as Calling AE when it queries the worklist or reports MPPS
     ae_title: AETitle
     modality: ModalityCodeChoices
-    scheduled_station_ae_title: AETitle | None = None
     ip: IPvAnyAddress | None = None
 
 
