@@ -1,0 +1,81 @@
+from django.db.models import Q
+
+from care.emr.models.device import Device
+from care.emr.resources.device.spec import DeviceAvailabilityStatusChoices, DeviceStatusChoices
+from care_radiology.constants import (
+    ASSIGNMENT_STATUS_ASSIGNED,
+    ASSIGNMENT_STATUS_UNASSIGNED,
+    DICOM_CARE_TYPE,
+    DICOM_ENABLER_CARE_TYPE,
+)
+
+
+def active_available_devices(facility):
+    return Device.objects.filter(
+        facility=facility,
+        status=DeviceStatusChoices.active,
+        availability_status=DeviceAvailabilityStatusChoices.available,
+    )
+
+
+def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_enabler=None):
+    """
+    The facility's active, available DICOM Enablers and DICOM devices, narrowed by the filters given.
+    `dicom_enabler` gives only the DICOM devices connected to that DICOM Enabler, not the enabler itself.
+    """
+    filters = Q(care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE])
+
+    if care_type:
+        filters &= Q(care_type=care_type)
+
+    # A device whose metadata has no assignment_status has never been assigned.
+    if assignment_status == ASSIGNMENT_STATUS_ASSIGNED:
+        filters &= Q(metadata__assignment_status=ASSIGNMENT_STATUS_ASSIGNED)
+    elif assignment_status == ASSIGNMENT_STATUS_UNASSIGNED:
+        # Not a negated match on "assigned": for a missing key that is NULL in SQL and drops the row.
+        filters &= Q(metadata__assignment_status=ASSIGNMENT_STATUS_UNASSIGNED) | ~Q(
+            metadata__has_key="assignment_status"
+        )
+
+    if dicom_enabler:
+        filters &= Q(care_type=DICOM_CARE_TYPE, metadata__dicom_enabler=str(dicom_enabler))
+
+    return (
+        active_available_devices(facility)
+        .filter(filters)
+        .select_related("current_location")
+        .order_by("care_type", "registered_name", "id")
+    )
+
+
+def modality_list_items(devices):
+    return [modality_list_item(device) for device in devices]
+
+
+def modality_list_item(device):
+    metadata = device.metadata or {}
+    location = device.current_location
+    item = {
+        "id": str(device.external_id),
+        "device_name": device.registered_name,
+        "device_type": device.care_type,
+        "location": {"id": str(location.external_id), "name": location.name} if location else None,
+        "device_status": {
+            "status": device.status,
+            "availability_status": device.availability_status,
+        },
+        "assignment_status": metadata.get("assignment_status") or ASSIGNMENT_STATUS_UNASSIGNED,
+    }
+    # The fields of the other device type are left out, not returned as null.
+    if device.care_type == DICOM_CARE_TYPE:
+        machine = metadata.get("machine") or {}
+        # scheduled_station_ae_title is returned by the retrieve only
+        item["machine"] = {
+            "ae_title": machine.get("ae_title"),
+            "modality": machine.get("modality"),
+            "ip": machine.get("ip"),
+        }
+        item["dicom_enabler"] = metadata.get("dicom_enabler")
+    else:
+        item["ip"] = metadata.get("ip")
+    return item

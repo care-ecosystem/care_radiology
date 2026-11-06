@@ -398,9 +398,8 @@ paths:
         `available`, including those already assigned. It can be filtered in two ways:
         - **By type and status**: `care_type` limits it to one type and `assignment_status` to
           assigned or unassigned devices.
-        - **By DICOM Enabler**: `dicom_enabler` returns that DICOM Enabler and the DICOM devices
-          connected to it. Send `care_type=dicom` with it so that the enabler itself is left out
-          and only its connected devices are returned.
+        - **By DICOM Enabler**: `dicom_enabler` returns only the DICOM devices connected to that
+          DICOM Enabler; the enabler itself is not included.
 
         Each entry carries the device's summary, its `device_type` and its `assignment_status`;
         the fields of the other type are left out. The DICOM endpoints of a DICOM Enabler and the
@@ -412,8 +411,8 @@ paths:
            and shows the enablers it can pick.
         2. The user selects an `unassigned` one; the emulator calls
            `GET .../external/modalities/{device_id}/` for its DICOM endpoints and
-           `GET .../external/modalities/?dicom_enabler={device_id}&care_type=dicom` for the DICOM
-           devices connected to it.
+           `GET .../external/modalities/?dicom_enabler={device_id}` for the DICOM devices
+           connected to it.
         3. The emulator calls `PATCH .../{device_id}/status/` with
            `assignment_status: assigned`; the device is then listed as `assigned` and can no
            longer be retrieved.
@@ -431,8 +430,7 @@ paths:
           in: query
           required: false
           description: |
-            Only devices of this type. Leave empty (`--` in Swagger UI) to list both types. Send
-            `dicom` together with `dicom_enabler` to leave the enabler itself out.
+            Optional. Only devices of this type; omit it to list both types.
           schema:
             type: string
             enum: [dicom_enabler, dicom]
@@ -440,8 +438,8 @@ paths:
           in: query
           required: false
           description: |
-            Only devices with this `assignment_status`. Leave empty (`--` in Swagger UI) to list
-            both assigned and unassigned devices.
+            Optional. Only devices with this `assignment_status`; omit it to list both assigned
+            and unassigned devices.
           schema:
             type: string
             enum: [unassigned, assigned]
@@ -449,9 +447,9 @@ paths:
           in: query
           required: false
           description: |
-            external_id of a DICOM Enabler of the facility. Returns that DICOM Enabler and the
-            DICOM devices whose `dicom_enabler` is this id. Use it with `care_type=dicom` to get only the
-            devices connected to the enabler.
+            Optional. external_id of a DICOM Enabler of the facility. Returns only the DICOM
+            devices (`care_type: dicom`) whose `dicom_enabler` is this id; the DICOM Enabler itself
+            is not included. Combined with `care_type=dicom_enabler` it returns no devices.
           schema:
             type: string
             format: uuid
@@ -463,8 +461,8 @@ paths:
           description: |
             DICOM Enablers and DICOM devices of the facility, narrowed by the filters given. Each
             item's `device_type` says which fields are set: `machine` and `dicom_enabler` for a DICOM
-            device, `ip` and `dicom_count` for a DICOM Enabler; the others are left out. Pick an
-            example to see the response for each filter.
+            device, `ip` for a DICOM Enabler; the others are left out. Pick an example to see the
+            response for each filter.
           content:
             application/json:
               schema:
@@ -486,7 +484,6 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         ip: 192.168.1.40
-                        dicom_count: 1
                       - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
                         device_name: Siemens SOMATOM CT
                         device_type: dicom
@@ -518,7 +515,6 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         ip: 192.168.1.40
-                        dicom_count: 1
                 dicom_devices:
                   summary: care_type=dicom
                   value:
@@ -555,7 +551,6 @@ paths:
                           availability_status: available
                         assignment_status: unassigned
                         ip: 192.168.1.40
-                        dicom_count: 1
                 assigned:
                   summary: assignment_status=assigned - both device types
                   value:
@@ -577,7 +572,7 @@ paths:
                           ip: 192.168.1.45
                         dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
                 devices_of_dicom_enabler:
-                  summary: dicom_enabler={id}&care_type=dicom - devices connected to one DICOM Enabler
+                  summary: dicom_enabler={id} - devices connected to one DICOM Enabler
                   value:
                     count: 1
                     results:
@@ -613,7 +608,7 @@ paths:
         `device_id` is. For a DICOM Enabler it adds its DICOM endpoints (`store_scp`,
         `modality_scp`); for a DICOM device it adds the machine's `scheduled_station_ae_title`.
         The DICOM devices connected to an enabler are separate devices and are not included;
-        list them with `GET .../external/modalities/?dicom_enabler={device_id}&care_type=dicom`.
+        list them with `GET .../external/modalities/?dicom_enabler={device_id}`.
 
         Only devices that are `active`, `available` and not assigned can be retrieved. A device
         whose `assignment_status` is `assigned`, or whose `status` is not `active` or
@@ -632,7 +627,7 @@ paths:
         '200':
           description: |
             Device details. `assignment_status` is always `unassigned`. A DICOM Enabler carries
-            its `ip`, `dicom_count`, `store_scp` and `modality_scp`; a DICOM device carries its
+            its `ip`, `store_scp` and `modality_scp`; a DICOM device carries its
             `machine` (with `scheduled_station_ae_title`) and `dicom_enabler`. Pick an example to see
             each.
           content:
@@ -662,7 +657,6 @@ paths:
                       availability_status: available
                     assignment_status: unassigned
                     ip: 192.168.1.40
-                    dicom_count: 1
                 dicom:
                   summary: DICOM device
                   value:
@@ -2349,13 +2343,6 @@ components:
           type: string
           description: DICOM Enabler only. IP address of the DICOM Enabler.
           example: 192.168.1.40
-        dicom_count:
-          type: integer
-          minimum: 0
-          description: |
-            DICOM Enabler only. Number of `active`, `available` DICOM devices whose `dicom_enabler` is
-            this enabler.
-          example: 1
 
     Modality:
       description: |
