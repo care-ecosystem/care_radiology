@@ -10,10 +10,15 @@ from care_radiology.api.specs.modality import (
     DicomEnablerMetadataWriteSpec,
 )
 from care_radiology.constants import DICOM_CARE_TYPE, DICOM_ENABLER_CARE_TYPE
+from care_radiology.services.modality_service import assignment_status_of
 
 
 def write_metadata(obj, validated_data):
-    obj.metadata = validated_data.model_dump(mode="json")
+    metadata = validated_data.model_dump(mode="json")
+    # assignment_status is changed only by the external modalities status API: a new device is written as
+    # unassigned and an edited one keeps the value it has.
+    metadata["assignment_status"] = assignment_status_of(obj)
+    obj.metadata = metadata
     obj.save(update_fields=["metadata"])
     return obj
 
