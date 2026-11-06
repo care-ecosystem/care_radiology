@@ -56,14 +56,6 @@ class ModalityDevice(DeviceTypeBase):
         )
         if other_dicom_devices.filter(metadata__machine__ae_title__iexact=validated_data.machine.ae_title).exists():
             raise ValidationError("A modality device with this AE title already exists in the facility")
-        scheduled_station_ae_title = validated_data.machine.scheduled_station_ae_title
-        if (
-            scheduled_station_ae_title
-            and other_dicom_devices.filter(
-                metadata__machine__scheduled_station_ae_title__iexact=scheduled_station_ae_title
-            ).exists()
-        ):
-            raise ValidationError("A DICOM device with this scheduled station AE title already exists in the facility")
         if not Device.objects.filter(
             facility_id=obj.facility_id,
             care_type=DICOM_ENABLER_CARE_TYPE,
@@ -94,6 +86,15 @@ class ModalityEnablerDevice(DeviceTypeBase):
 
     def handle_update(self, request_data, obj):
         return self._write_metadata(request_data, obj, is_create=False)
+
+    def handle_delete(self, obj):
+        if Device.objects.filter(
+            facility_id=obj.facility_id,
+            care_type=DICOM_CARE_TYPE,
+            metadata__dicom_enabler=str(obj.external_id),
+        ).exists():
+            raise ValidationError("Move or delete the DICOM devices connected to this DICOM Enabler first.")
+        return obj
 
     def list(self, obj):
         return self.retrieve(obj)

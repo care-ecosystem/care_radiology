@@ -151,7 +151,6 @@ def modality_list_item(device):
     # The fields of the other device type are left out, not returned as null.
     if device.care_type == DICOM_CARE_TYPE:
         machine = metadata.get("machine") or {}
-        # scheduled_station_ae_title is returned by the retrieve only
         item["machine"] = {
             "ae_title": machine.get("ae_title"),
             "modality": machine.get("modality"),
@@ -164,17 +163,10 @@ def modality_list_item(device):
 
 
 def modality_detail(device):
-    """
-    The list item plus the DICOM endpoints of a DICOM Enabler, or the Scheduled Station AE Title of a
-    DICOM device.
-    """
+    """The list item plus, for a DICOM Enabler, its DICOM endpoints. A DICOM device has nothing more."""
     item = modality_list_item(device)
-    metadata = device.metadata or {}
-    if device.care_type == DICOM_CARE_TYPE:
-        item["machine"]["scheduled_station_ae_title"] = (metadata.get("machine") or {}).get(
-            "scheduled_station_ae_title"
-        )
-    else:
+    if device.care_type == DICOM_ENABLER_CARE_TYPE:
+        metadata = device.metadata or {}
         item["store_scp"] = metadata.get("store_scp")
         item["modality_scp"] = metadata.get("modality_scp")
     return item

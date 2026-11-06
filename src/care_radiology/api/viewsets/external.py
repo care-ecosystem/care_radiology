@@ -82,7 +82,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         page = paginator.paginate_queryset(devices, request, view=self)
         return paginator.get_paginated_response(modality_list_items(page))
 
-    # One unassigned DICOM Enabler or DICOM device, with its DICOM endpoints or Scheduled Station AE Title.
+    # One unassigned DICOM Enabler or DICOM device, with a DICOM Enabler's DICOM endpoints.
     @action(detail=False, methods=["get"], url_path=r"modalities/(?P<device_id>[^/.]+)", url_name="modality-detail")
     def retrieve_modality(self, request, device_id, *args, **kwargs):
         device = get_modality(facility=self.get_facility(), device_id=device_id)
