@@ -72,20 +72,47 @@ paths:
       summary: Get modality worklist
       description: |
         Returns the active service requests of the facility given in the path, formatted for a
-        DICOM modality worklist. Optionally filter by the location (room) name (`location`) or
-        date range (`created_date_after`, `created_date_before`). When several are given, all
-        apply. Any further filtering, such as by modality, is done by the DICOM Enabler itself.
+        DICOM modality worklist. Optionally filter by DICOM Enabler (`dicom_enabler`) or date
+        range (`created_date_after`, `created_date_before`). When several are given, all apply.
+        Any further filtering, such as by modality, is done by the DICOM Enabler itself.
 
         Each entry carries the `accession_number` from `ImagingStudy`, the
         `referring_physician` who raised the service request, and the `locations` of the
         service request's `activity_definition.locations`. Each location lists all the DICOM
         devices (`care_type: dicom`) whose `current_location` it is, with their registered name,
-        `ae_title`, `modality` and `scheduled_station_ae_title`: every device in a location
+        `ae_title` and `modality`: every device in a location
         shares the same worklist. Devices are fetched in one query
         for the whole worklist.
 
-        With `location`, only requests that include a location of that name are returned, and
-        each lists only that location.
+        With `dicom_enabler`, the worklist is that DICOM Enabler's: its locations are the
+        `current_location` of every `active`, `available` DICOM device whose `dicom_enabler` is
+        this id. The DICOM Enabler's own `current_location` is not used. Only requests that
+        include at least one of these locations are returned; each lists only these locations,
+        and each location lists only this DICOM Enabler's DICOM devices. So moving a DICOM device
+        to another room, or connecting it to another DICOM Enabler, in CARE changes the worklist
+        with no change on the DICOM Enabler. A DICOM Enabler with no such device located in a
+        room gets an empty worklist. Its `assignment_status` is not checked.
+
+        **Routing a request to specific machines.** A request reaches a DICOM device only
+        through locations: an activity definition has no link to devices, and every DICOM device
+        in a location gets all the requests of that location. When only some machines of a room
+        can perform an activity definition, give each machine its own location, a child of the
+        room (`parent`), set it as the DICOM device's `current_location`, and list in the
+        activity definition's `locations` the machine locations that can perform it. For example:
+
+        | Location | DICOM device |
+        |---|---|
+        | CT Room 1 / CT Scanner 1 | CT1 |
+        | CT Room 1 / CT Scanner 2 | CT2 |
+        | X-Ray Room / DX Unit 1 | DX1 |
+
+        - "CT Brain": `locations` [CT Scanner 1, CT Scanner 2], so it is listed for CT1 and CT2
+        - "CT Cardiac": `locations` [CT Scanner 2], so it is listed for CT2 only
+        - "Chest X-ray": `locations` [DX Unit 1], so it is listed for DX1 only
+
+        Each worklist entry then lists exactly the devices that can perform it. A DICOM device
+        located in the room itself gets only the requests whose activity definition lists the
+        room; a request listing only a machine location does not reach it.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -94,14 +121,19 @@ paths:
         - StaticApiKey: []
       parameters:
         - $ref: '#/components/parameters/FacilityId'
-        - name: location
+        - name: dicom_enabler
           in: query
+          required: false
           description: |
-            Filter by location (room) name (case-insensitive): only service requests whose
-            `activity_definition.locations` include a location of the facility with this name
+            Optional. external_id of a DICOM Enabler (`care_type: dicom_enabler`) of the
+            facility, the `device_id` it got from `GET .../external/modalities/`. Only service
+            requests whose `activity_definition.locations` include the `current_location` of one
+            of its DICOM devices. Returns `400` when it is not a valid UUID, or not the id of a
+            DICOM Enabler of the facility.
           schema:
             type: string
-            example: "CT Room 1"
+            format: uuid
+            example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         - name: created_date_after
           in: query
           description: Start date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
@@ -134,6 +166,28 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/WorklistEntry'
+        '400':
+          description: |
+            `dicom_enabler` is not a valid UUID, or not the id of a DICOM Enabler of the facility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                dicom_enabler_invalid:
+                  summary: dicom_enabler is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "Must be a valid DICOM Enabler id."
+                dicom_enabler_not_found:
+                  summary: dicom_enabler is not a DICOM Enabler of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "No DICOM Enabler with this id in the facility."
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -402,8 +456,8 @@ paths:
           DICOM Enabler; the enabler itself is not included.
 
         Each entry carries the device's summary, its `device_type` and its `assignment_status`;
-        the fields of the other type are left out. The DICOM endpoints of a DICOM Enabler and the
-        `scheduled_station_ae_title` of a DICOM device are returned by the retrieve.
+        the fields of the other type are left out. The DICOM endpoints of a DICOM Enabler are
+        returned by the retrieve.
 
         Flow:
         1. The Modality Emulator calls
@@ -644,8 +698,7 @@ paths:
       description: |
         Returns the full details of one DICOM Enabler or DICOM device of the facility, whichever
         `device_id` is. For a DICOM Enabler it adds its DICOM endpoints (`store_scp`,
-        `modality_scp`); for a DICOM device it adds the machine's `scheduled_station_ae_title`.
-        The DICOM devices connected to an enabler are separate devices and are not included;
+        `modality_scp`); a DICOM device is returned as in the list. The DICOM devices connected to an enabler are separate devices and are not included;
         list them with `GET .../external/modalities/?dicom_enabler={device_id}`.
 
         Only devices that are `active`, `available` and not assigned can be retrieved. Any other
@@ -666,8 +719,7 @@ paths:
           description: |
             Device details. `assignment_status` is always `unassigned`. A DICOM Enabler carries
             its `ip`, `store_scp` and `modality_scp`; a DICOM device carries its
-            `machine` (with `scheduled_station_ae_title`) and `dicom_enabler`. Pick an example to see
-            each.
+            `machine` and `dicom_enabler`. Pick an example to see each.
           content:
             application/json:
               schema:
@@ -711,7 +763,6 @@ paths:
                     machine:
                       ae_title: CT1
                       modality: CT
-                      scheduled_station_ae_title: CT Scan 1
                       ip: 192.168.1.45
                     dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '400':
@@ -780,10 +831,11 @@ paths:
           `status`. It is then listed with `assignment_status: unassigned` and can be retrieved
           and assigned again.
 
-        `assignment_status` changes only through this endpoint; editing the device through the
-        CARE device API keeps it.
+        `assignment_status` can also be changed by editing the device through the CARE device
+        API (`care_metadata.assignment_status` on update); a device edit that leaves it out keeps it.
 
-        Setting the status the device already has returns `409`.
+        Setting the status the device already has returns `409`, through this endpoint and
+        through the CARE device API.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -811,8 +863,8 @@ paths:
           description: |
             Assignment status updated. Returns the device in the same body as the retrieve, with
             the new `assignment_status`. A DICOM Enabler carries its `ip`, `store_scp` and
-            `modality_scp`; a DICOM device carries its `machine` (with `scheduled_station_ae_title`)
-            and `dicom_enabler`. Pick an example to see each.
+            `modality_scp`; a DICOM device carries its `machine` and `dicom_enabler`. Pick an
+            example to see each.
           content:
             application/json:
               schema:
@@ -856,7 +908,6 @@ paths:
                     machine:
                       ae_title: CT1
                       modality: CT
-                      scheduled_station_ae_title: CT Scan 1
                       ip: 192.168.1.45
                     dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         '400':
@@ -1774,7 +1825,8 @@ components:
         devices:
           type: array
           description: |
-            All DICOM devices (`care_type: dicom`) whose `current_location` is this location
+            All DICOM devices (`care_type: dicom`) whose `current_location` is this location;
+            with the `dicom_enabler` filter, only those connected to that DICOM Enabler.
           items:
             type: object
             properties:
@@ -1801,14 +1853,6 @@ components:
                     for Modality (0008,0060) in the worklist item. The DICOM Enabler can use it to
                     match a C-FIND by its Modality query key.
                   example: "CT"
-                scheduled_station_ae_title:
-                  type: string
-                  nullable: true
-                  description: |
-                    The device's `machine.scheduled_station_ae_title`, for Scheduled Station AE
-                    Title (0040,0001) in the worklist item. Unique (case-insensitive) among the
-                    facility's DICOM devices. Null when not configured.
-                  example: "CT Scan 1"
 
     # ===================== Imaging Study =====================
     ImagingStudyListItem:
@@ -2332,17 +2376,6 @@ components:
           enum: [AR, BMD, BDUS, EPS, CR, CT, DX, ECG, ES, XC, GM, HD, IO, IVOCT, IVUS, KER, LEN, MR, MG, NM,
                  OAM, OCT, OPM, OP, OPR, OPT, OPV, OSS, PX, PT, RF, RG, SM, SRF, US, VA, XA]
           example: CT
-        scheduled_station_ae_title:
-          type: string
-          nullable: true
-          maxLength: 16
-          pattern: '^[\x20-\x5B\x5D-\x7E]+$'
-          description: |
-            Scheduled Station AE Title (0040,0001) of the machine. Unique (case-insensitive)
-            among the facility's DICOM devices; a duplicate is rejected with `400` on device
-            create or update. Same value rules as `ae_title`. Returned by the retrieve, not by
-            the list. Null when not configured.
-          example: CT Scan 1
         ip:
           type: string
           nullable: true
@@ -2384,9 +2417,11 @@ components:
           example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         assignment_status:
           type: string
-          readOnly: true
           description: |
-            Read only here: `unassigned` on create and kept on update. Changed with
+            Always `unassigned` on create, whatever is sent. On update, the new status; leave it
+            out to keep the current one. Sending the status the device already has returns `409`
+            (`Device is already assigned.` / `Device is already unassigned.`). Only an `active`,
+            `available` device can be set to `assigned`, otherwise `400`. Also changed with
             `PATCH .../external/modalities/{device_id}/status/`.
           enum: [unassigned, assigned]
 
@@ -2413,9 +2448,11 @@ components:
             - $ref: '#/components/schemas/DicomEndpoint'
         assignment_status:
           type: string
-          readOnly: true
           description: |
-            Read only here: `unassigned` on create and kept on update. Changed with
+            Always `unassigned` on create, whatever is sent. On update, the new status; leave it
+            out to keep the current one. Sending the status the device already has returns `409`
+            (`Device is already assigned.` / `Device is already unassigned.`). Only an `active`,
+            `available` device can be set to `assigned`, otherwise `400`. Also changed with
             `PATCH .../external/modalities/{device_id}/status/`.
           enum: [unassigned, assigned]
 
@@ -2460,8 +2497,7 @@ components:
         machine:
           description: |
             DICOM device only. The machine as a caller: the AE title, modality and IP it uses
-            when it queries the worklist (C-FIND) or reports MPPS. `scheduled_station_ae_title`
-            is returned by the retrieve only.
+            when it queries the worklist (C-FIND) or reports MPPS.
           allOf:
             - $ref: '#/components/schemas/MachineEndpoint'
         dicom_enabler:
@@ -2477,10 +2513,8 @@ components:
     Modality:
       description: |
         Full details of a DICOM Enabler or DICOM device, as returned by the retrieve and the
-        assignment status update. The list
-        item plus, for a DICOM Enabler, the DICOM endpoints, and for a DICOM device, the
-        machine's `scheduled_station_ae_title`. A DICOM device has no DICOM endpoints, and they
-        are left out of its response.
+        assignment status update. The list item plus, for a DICOM Enabler, the DICOM endpoints.
+        A DICOM device has no DICOM endpoints, and they are left out of its response.
       allOf:
         - $ref: '#/components/schemas/ModalityListItem'
         - type: object
