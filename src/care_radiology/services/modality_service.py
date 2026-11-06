@@ -63,6 +63,36 @@ def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_en
     )
 
 
+def get_modality(*, facility, device_id):
+    """
+    One active, available, unassigned DICOM Enabler or DICOM device of the facility, or a 400 naming
+    `device_id` that says why it cannot be retrieved.
+    """
+    try:
+        device_uuid = uuid.UUID(device_id)
+    except ValueError:
+        raise ValidationError({"device_id": "Must be a valid device id."}) from None
+    device = (
+        Device.objects.filter(
+            facility=facility,
+            care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE],
+            external_id=device_uuid,
+        )
+        .select_related("current_location")
+        .first()
+    )
+    if device is None:
+        raise ValidationError({"device_id": "No DICOM Enabler or DICOM device with this id in the facility."})
+    if (
+        device.status != DeviceStatusChoices.active
+        or device.availability_status != DeviceAvailabilityStatusChoices.available
+    ):
+        raise ValidationError({"device_id": "Device is not active and available."})
+    if (device.metadata or {}).get("assignment_status") == ASSIGNMENT_STATUS_ASSIGNED:
+        raise ValidationError({"device_id": "Device is already assigned."})
+    return device
+
+
 def modality_list_items(devices):
     return [modality_list_item(device) for device in devices]
 
@@ -93,4 +123,21 @@ def modality_list_item(device):
         item["dicom_enabler"] = metadata.get("dicom_enabler")
     else:
         item["ip"] = metadata.get("ip")
+    return item
+
+
+def modality_detail(device):
+    """
+    The list item plus the DICOM endpoints of a DICOM Enabler, or the Scheduled Station AE Title of a
+    DICOM device.
+    """
+    item = modality_list_item(device)
+    metadata = device.metadata or {}
+    if device.care_type == DICOM_CARE_TYPE:
+        item["machine"]["scheduled_station_ae_title"] = (metadata.get("machine") or {}).get(
+            "scheduled_station_ae_title"
+        )
+    else:
+        item["store_scp"] = metadata.get("store_scp")
+        item["modality_scp"] = metadata.get("modality_scp")
     return item
