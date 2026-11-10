@@ -30,6 +30,13 @@ class CareRadiologyPluginConfig(AppConfig):
 
         import care_radiology.security.access  # noqa: F401
 
+        from care.emr.registries.device_type.device_registry import DeviceTypeRegistry
+        from care_radiology.api.device import ModalityDevice, ModalityEnablerDevice
+        from care_radiology.constants import DICOM_CARE_TYPE, DICOM_ENABLER_CARE_TYPE
+
+        DeviceTypeRegistry.register(DICOM_CARE_TYPE, ModalityDevice)
+        DeviceTypeRegistry.register(DICOM_ENABLER_CARE_TYPE, ModalityEnablerDevice)
+
         # Skip validation during build-time commands (allows CARE images to build)
         # Validation happens at runtime when settings are actually needed
         if len(sys.argv) > 1 and sys.argv[1] in BUILD_TIME_COMMANDS:
