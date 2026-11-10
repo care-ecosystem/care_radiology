@@ -89,7 +89,7 @@ def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_en
 
 def get_modality(*, facility, device_id):
     """
-    One active, available, unassigned DICOM Enabler or DICOM device of the facility, or a 400 naming
+    One active, available DICOM Enabler or DICOM device of the facility, assigned or not, or a 400 naming
     `device_id` that says why it cannot be retrieved.
     """
     try:
@@ -109,8 +109,6 @@ def get_modality(*, facility, device_id):
         raise ValidationError({"device_id": "No DICOM Enabler or DICOM device with this id in the facility."})
     if not is_active_available(device):
         raise ValidationError({"device_id": "Device is not active and available."})
-    if assignment_status_of(device) == ASSIGNMENT_STATUS_ASSIGNED:
-        raise ValidationError({"device_id": "Device is already assigned."})
     return device
 
 
