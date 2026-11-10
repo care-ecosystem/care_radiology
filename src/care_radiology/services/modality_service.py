@@ -41,14 +41,14 @@ def active_available_devices(facility):
     )
 
 
-def dicom_enabler_id(facility, value):
-    """`value` as the external_id of a DICOM Enabler of the facility, or a 400 naming the `dicom_enabler` filter."""
+def dicom_enabler_id(facility, value, field):
+    """`value` as the external_id of a DICOM Enabler of the facility, or a 400 naming the query parameter `field`."""
     try:
         enabler_id = uuid.UUID(value)
     except ValueError:
-        raise ValidationError({"dicom_enabler": "Must be a valid DICOM Enabler id."}) from None
+        raise ValidationError({field: "Must be a valid DICOM Enabler id."}) from None
     if not Device.objects.filter(facility=facility, care_type=DICOM_ENABLER_CARE_TYPE, external_id=enabler_id).exists():
-        raise ValidationError({"dicom_enabler": "No DICOM Enabler with this id in the facility."})
+        raise ValidationError({field: "No DICOM Enabler with this id in the facility."})
     return enabler_id
 
 
@@ -76,7 +76,7 @@ def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_en
         )
 
     if dicom_enabler is not None:
-        enabler_id = dicom_enabler_id(facility, dicom_enabler)
+        enabler_id = dicom_enabler_id(facility, dicom_enabler, field="dicom_enabler")
         filters &= Q(care_type=DICOM_CARE_TYPE, metadata__dicom_enabler=str(enabler_id))
 
     return (
