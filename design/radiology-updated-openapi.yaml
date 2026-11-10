@@ -10,15 +10,18 @@ info:
       request carries its newest diagnostic report
     - Serve a DICOM modality worklist and receive MPPS status webhooks from the
       DICOM modality worklist server
+    - List the DICOM Enablers (`care_type: dicom-enabler`) and DICOM devices
+      (`care_type: dicom`) of a facility, and assign or unassign them
     - Manage per-facility observation result templates used to structure diagnostic report
       observations
 
     **Authentication:**
     - Standard CARE endpoints use JWT Bearer auth (Authorization: Bearer <token>).
-    - DICOM worklist, external upload and webhook endpoints use a static API key
-      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). They live under the
+    - External endpoints (worklist, external upload, MPPS webhook and modalities) live under the
       `/facility/{facility_id}/external/` path prefix and are grouped under the
-      `External APIs` tag. The key is a single shared secret, not scoped to one facility.
+      `External APIs` tag. They use a static API key
+      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). The key is a single shared secret, not
+      scoped to one facility, and no user permission check is performed.
 
   version: 1.0.0
 
@@ -30,9 +33,10 @@ tags:
   - name: External APIs
     description: |
       Machine-to-machine endpoints authenticated with a static API key
-      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>): the modality worklist, DICOM upload
-      from external systems, and MPPS (Modality Performed Procedure Step) status
-      notifications from the modality worklist server
+      (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>): the modality
+      worklist, DICOM upload from external systems, MPPS (Modality Performed Procedure Step)
+      status notifications from the modality worklist server, and DICOM Enabler / DICOM device
+      discovery and assignment
   - name: Imaging Study
     description: Read imaging studies (status, accession number) with their encounter, core service request and linked DICOM studies, update their status, upload DICOM files against a service request, and archive DICOM studies
   - name: Observation Result Templates
@@ -67,30 +71,67 @@ paths:
         - External APIs
       summary: Get modality worklist
       description: |
-        Returns the active service requests of the facility given in the path, formatted for a
-        DICOM modality worklist. Authenticated with static API key
-        (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>). Optionally filter by location name
-        (`modality`) or date range.
+        Returns the active service requests of the facility given in the path for one DICOM
+        Enabler (`device`, required), formatted for a DICOM modality worklist. Optionally filter
+        by date range (`created_date_after`, `created_date_before`); when given, these apply as
+        well. Any further filtering, such as by modality, is done by the DICOM Enabler itself.
 
-        Each entry carries the `accession_number` from `ImagingStudy`, and the `locations` of the
-        service request's `activity_definition.locations`, each with the `devices` whose
-        `current_location` it is. With `modality`, only requests that include a location of that
-        name are returned, and each lists only that location, with all its devices: every device
-        in a location shares the same worklist. Devices are fetched in one query for the whole
-        worklist.
+        Each entry carries the `accession_number` from `ImagingStudy`, the
+        `referring_physician` who raised the service request, and the `locations` of the
+        service request's `activity_definition.locations`. Each location lists the DICOM
+        devices (`care_type: dicom`) whose `current_location` it is, with their registered name,
+        `ae_title` and `modality`: every device in a location shares the same worklist.
+
+        The worklist is the DICOM Enabler's: its locations are the
+        `current_location` of every `active`, `available` DICOM device whose `dicom_enabler` is
+        this id. The DICOM Enabler's own `current_location` is not used. Only requests that
+        include at least one of these locations are returned; each lists only these locations,
+        and each location lists only this DICOM Enabler's DICOM devices. So moving a DICOM device
+        to another room, or connecting it to another DICOM Enabler, in CARE changes the worklist
+        with no change on the DICOM Enabler. A DICOM Enabler with no such device located in a
+        room gets an empty worklist. Its `assignment_status` is not checked.
+
+        **Routing a request to specific machines.** A request reaches a DICOM device only
+        through locations: an activity definition has no link to devices, and every DICOM device
+        in a location gets all the requests of that location. When only some machines of a room
+        can perform an activity definition, give each machine its own location, a child of the
+        room (`parent`), set it as the DICOM device's `current_location`, and list in the
+        activity definition's `locations` the machine locations that can perform it. For example:
+
+        | Location | DICOM device |
+        |---|---|
+        | CT Room 1 / CT Scanner 1 | CT1 |
+        | CT Room 1 / CT Scanner 2 | CT2 |
+        | X-Ray Room / DX Unit 1 | DX1 |
+
+        - "CT Brain": `locations` [CT Scanner 1, CT Scanner 2], so it is listed for CT1 and CT2
+        - "CT Cardiac": `locations` [CT Scanner 2], so it is listed for CT2 only
+        - "Chest X-ray": `locations` [DX Unit 1], so it is listed for DX1 only
+
+        Each worklist entry then lists exactly the devices that can perform it. A DICOM device
+        located in the room itself gets only the requests whose activity definition lists the
+        room; a request listing only a machine location does not reach it.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
       operationId: dicomWorklist
       security:
         - StaticApiKey: []
       parameters:
         - $ref: '#/components/parameters/FacilityId'
-        - name: modality
+        - name: device
           in: query
+          required: true
           description: |
-            Filter by location name (case-insensitive): only service requests whose
-            `activity_definition.locations` include a location of the facility with this name
+            Required. external_id of a DICOM Enabler (`care_type: dicom-enabler`) of the
+            facility, the `device_id` it got from `GET .../external/modalities/`. Only service
+            requests whose `activity_definition.locations` include the `current_location` of one
+            of its DICOM devices. Returns `400` when it is missing, not a valid UUID, or not the
+            id of a DICOM Enabler of the facility.
           schema:
             type: string
-            example: "CT Room 1"
+            format: uuid
+            example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
         - name: created_date_after
           in: query
           description: Start date filter (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
@@ -123,6 +164,35 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/WorklistEntry'
+        '400':
+          description: |
+            `device` is missing, not a valid UUID, or not the id of a DICOM Enabler of the facility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                device_missing:
+                  summary: device is not given
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["device"]
+                        msg: "Field required"
+                device_invalid:
+                  summary: device is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device: "Must be a valid DICOM Enabler id."
+                device_not_found:
+                  summary: device is not a DICOM Enabler of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device: "No DICOM Enabler with this id in the facility."
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -272,8 +342,7 @@ paths:
       description: |
         Webhook endpoint called by the DICOM worklist server with Modality Performed
         Procedure Step (MPPS) status updates for a service request of the facility given in
-        the path. Authenticated with static API key. All payloads are persisted to
-        `RadiologyWebhookLogs` with `type="MPPS"`.
+        the path. All payloads are persisted to `RadiologyWebhookLogs` with `type="MPPS"`.
 
         `study_status` is the imaging study status to set (`IN_PROGRESS`, `COMPLETED` or
         `CANCELLED`):
@@ -284,6 +353,9 @@ paths:
           (duplicates are skipped): `IN_PROGRESS` → `Scan Started`, `COMPLETED` →
           `Scan Completed`, `CANCELLED` → `Scan Cancelled`. With no such tag, only the
           imaging study is updated.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
       operationId: webhookStatus
       security:
         - StaticApiKey: []
@@ -368,6 +440,539 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 detail: "Error updating tags"
+
+  /api/care_radiology/facility/{facility_id}/external/modalities/:
+    get:
+      tags:
+        - External APIs
+      summary: List DICOM Enablers and DICOM devices
+      description: |
+        Called by the DICOM Enabler (Modality Emulator) to show the facility's DICOM Enablers
+        (`care_type: dicom-enabler`, one per DICOM Enabler, usually per room) and DICOM devices
+        (`care_type: dicom`, one per modality machine). Every DICOM device connects to exactly
+        one DICOM Enabler through its `dicom_enabler` field, so a single DICOM Enabler serves all the
+        machines of a room.
+
+        Lists the devices of both types whose `status` is `active` and `availability_status` is
+        `available`, including those already assigned. It can be filtered in three ways:
+        - **By type and status**: `care_type` limits it to one type and `assignment_status` to
+          assigned or unassigned devices.
+        - **By DICOM Enabler**: `dicom_enabler` returns only the DICOM devices connected to that
+          DICOM Enabler; the enabler itself is not included.
+        - **By name**: `device_name` returns only devices whose name contains that text,
+          ignoring case.
+
+        Each entry carries the device's summary, its `device_type` and its `assignment_status`;
+        the fields of the other type are left out. The DICOM endpoints of a DICOM Enabler are
+        returned by the retrieve.
+
+        Flow:
+        1. The Modality Emulator calls
+           `GET .../external/modalities/?care_type=dicom-enabler&assignment_status=unassigned`
+           and shows the enablers it can pick.
+        2. The user selects an `unassigned` one; the emulator calls
+           `GET .../external/modalities/{device_id}/` for its DICOM endpoints and
+           `GET .../external/modalities/?dicom_enabler={device_id}` for the DICOM devices
+           connected to it.
+        3. The emulator calls `PATCH .../{device_id}/status/` with
+           `assignment_status: assigned`; the device is then listed as `assigned` and can
+           still be retrieved.
+        4. When no DICOM Enabler uses it any more, `PATCH .../{device_id}/status/` with
+           `assignment_status: unassigned` unassigns it.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
+      operationId: listModalities
+      security:
+        - StaticApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/FacilityId'
+        - name: care_type
+          in: query
+          required: false
+          description: |
+            Optional. Only devices of this type; omit it to list both types.
+          schema:
+            type: string
+            enum: [dicom-enabler, dicom]
+        - name: assignment_status
+          in: query
+          required: false
+          description: |
+            Optional. Only devices with this `assignment_status`; omit it to list both assigned
+            and unassigned devices.
+          schema:
+            type: string
+            enum: [unassigned, assigned]
+        - name: dicom_enabler
+          in: query
+          required: false
+          description: |
+            Optional. external_id of a DICOM Enabler of the facility. Returns only the DICOM
+            devices (`care_type: dicom`) whose `dicom_enabler` is this id; the DICOM Enabler itself
+            is not included. Combined with `care_type=dicom-enabler` it returns no devices.
+            Returns `400` when it is not a valid UUID, or not the id of a DICOM Enabler of the
+            facility.
+          schema:
+            type: string
+            format: uuid
+            example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        - name: device_name
+          in: query
+          required: false
+          description: |
+            Optional. Only devices whose `device_name` contains this text, ignoring case (`ct`
+            matches `Siemens SOMATOM CT`). Works for both types and combines with the other
+            filters, e.g. `care_type=dicom&dicom_enabler={id}&device_name=ct`.
+          schema:
+            type: string
+            example: somatom
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: |
+            DICOM Enablers and DICOM devices of the facility, narrowed by the filters given. Each
+            item's `device_type` says which fields are set: `machine` and `dicom_enabler` for a DICOM
+            device, `ip` for a DICOM Enabler; the others are left out. Pick an example to see the
+            response for each filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModalityList'
+              examples:
+                all:
+                  summary: No filters - both device types, assigned and unassigned
+                  value:
+                    count: 2
+                    results:
+                      - id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        device_name: CT Room 1 Enabler
+                        device_type: dicom-enabler
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: unassigned
+                        last_synced_at: null
+                        ip: 192.168.1.40
+                      - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                        device_name: Siemens SOMATOM CT
+                        device_type: dicom
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                        machine:
+                          ae_title: CT1
+                          modality: CT
+                          ip: 192.168.1.45
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                dicom_enablers:
+                  summary: care_type=dicom-enabler
+                  value:
+                    count: 1
+                    results:
+                      - id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        device_name: CT Room 1 Enabler
+                        device_type: dicom-enabler
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: unassigned
+                        last_synced_at: null
+                        ip: 192.168.1.40
+                dicom_devices:
+                  summary: care_type=dicom
+                  value:
+                    count: 1
+                    results:
+                      - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                        device_name: Siemens SOMATOM CT
+                        device_type: dicom
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                        machine:
+                          ae_title: CT1
+                          modality: CT
+                          ip: 192.168.1.45
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                unassigned_dicom_enablers:
+                  summary: care_type=dicom-enabler&assignment_status=unassigned
+                  value:
+                    count: 1
+                    results:
+                      - id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                        device_name: CT Room 1 Enabler
+                        device_type: dicom-enabler
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: unassigned
+                        last_synced_at: null
+                        ip: 192.168.1.40
+                assigned:
+                  summary: assignment_status=assigned - both device types
+                  value:
+                    count: 1
+                    results:
+                      - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                        device_name: Siemens SOMATOM CT
+                        device_type: dicom
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                        machine:
+                          ae_title: CT1
+                          modality: CT
+                          ip: 192.168.1.45
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                devices_of_dicom_enabler:
+                  summary: dicom_enabler={id} - devices connected to one DICOM Enabler
+                  value:
+                    count: 1
+                    results:
+                      - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                        device_name: Siemens SOMATOM CT
+                        device_type: dicom
+                        location:
+                          id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                          name: CT Room 1
+                        device_status:
+                          status: active
+                          availability_status: available
+                        assignment_status: assigned
+                        last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                        machine:
+                          ae_title: CT1
+                          modality: CT
+                          ip: 192.168.1.45
+                        dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        '400':
+          description: |
+            `care_type` or `assignment_status` is not one of the allowed values, or `dicom_enabler`
+            is not a valid UUID or not the id of a DICOM Enabler of the facility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                dicom_enabler_invalid:
+                  summary: dicom_enabler is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "Must be a valid DICOM Enabler id."
+                dicom_enabler_not_found:
+                  summary: dicom_enabler is not a DICOM Enabler of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          dicom_enabler: "No DICOM Enabler with this id in the facility."
+                invalid_care_type:
+                  summary: care_type is not an allowed value
+                  value:
+                    errors:
+                      - type: "literal_error"
+                        loc: ["care_type"]
+                        msg: "Input should be 'dicom-enabler' or 'dicom'"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The given facility does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Facility matches the given query."
+
+  /api/care_radiology/facility/{facility_id}/external/modalities/{device_id}/:
+    get:
+      tags:
+        - External APIs
+      summary: Retrieve a DICOM Enabler or DICOM device
+      description: |
+        Returns the full details of one DICOM Enabler or DICOM device of the facility, whichever
+        `device_id` is. For a DICOM Enabler it adds its DICOM endpoints (`store_scp`,
+        `modality_scp`); a DICOM device is returned as in the list. The DICOM devices connected to an enabler are separate devices and are not included;
+        list them with `GET .../external/modalities/?dicom_enabler={device_id}`.
+
+        Only devices that are `active` and `available` can be retrieved, whether `assigned` or
+        `unassigned`. Any other `device_id` returns `400` with a message saying why: it is not a
+        valid UUID, it is not a DICOM Enabler or DICOM device of the facility, or the device is
+        not `active` / `available`.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
+      operationId: retrieveModality
+      security:
+        - StaticApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/FacilityId'
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: |
+            Device details, with its current `assignment_status`. A DICOM Enabler carries
+            its `ip`, `store_scp` and `modality_scp`; a DICOM device carries its
+            `machine` and `dicom_enabler`. Pick an example to see each.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Modality'
+              examples:
+                dicom_enabler:
+                  summary: DICOM Enabler
+                  value:
+                    id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    device_name: CT Room 1 Enabler
+                    device_type: dicom-enabler
+                    store_scp:
+                      ae_title: STORESCP
+                      host: 0.0.0.0
+                      port: 2007
+                    modality_scp:
+                      ae_title: MODALITYSCP
+                      host: 0.0.0.0
+                      port: 2008
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    last_synced_at: null
+                    ip: 192.168.1.40
+                dicom:
+                  summary: DICOM device
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    device_name: Siemens SOMATOM CT
+                    device_type: dicom
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    last_synced_at: null
+                    machine:
+                      ae_title: CT1
+                      modality: CT
+                      ip: 192.168.1.45
+                    dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        '400':
+          description: |
+            `device_id` is not a valid UUID, is not a DICOM Enabler or DICOM device of the facility,
+            or the device is not `active` / `available`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                invalid_id:
+                  summary: device_id is not a valid UUID
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "Must be a valid device id."
+                not_found:
+                  summary: device_id is not a DICOM Enabler or DICOM device of the facility
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "No DICOM Enabler or DICOM device with this id in the facility."
+                not_available:
+                  summary: The device is not active and available
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        msg:
+                          device_id: "Device is not active and available."
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The given facility does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Facility matches the given query."
+
+  /api/care_radiology/facility/{facility_id}/external/modalities/{device_id}/status/:
+    patch:
+      tags:
+        - External APIs
+      summary: Update DICOM Enabler or DICOM device status
+      description: |
+        Sets the `assignment_status` of a DICOM Enabler or DICOM device, whichever `device_id`
+        is, with the `device_id` taken from the `GET .../external/modalities/` response. Called
+        when the device starts or stops being used:
+        - `assigned`: called after the user selects the device in the Modality Emulator. It is
+          then listed and retrieved with `assignment_status: assigned`. Only an `active`,
+          `available` device can be assigned.
+        - `unassigned`: called when no DICOM Enabler is using it any more, whatever its
+          `status`. It is then listed and retrieved with `assignment_status: unassigned` and can
+          be assigned again.
+
+        `assignment_status` can also be changed by editing the device through the CARE device
+        API (`care_metadata.assignment_status` on update); a device edit that leaves it out keeps it.
+
+        Sending the status the device already has is not an error through this endpoint: it
+        returns `200`, keeps the status and only updates `last_synced_at`. (Through the CARE
+        device API it still returns `409`.)
+
+        Every call to this endpoint that returns `200`, to `assigned` or to `unassigned` and
+        whether or not the status changes, sets `last_synced_at` to the current time, so it is the
+        time of the last sync. A `409` changes nothing. A device that has never been synced through
+        this endpoint has `last_synced_at: null`. Changing the status through the CARE device API
+        does not change it.
+
+        Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
+        No user permission check is performed.
+      operationId: updateModalityStatus
+      security:
+        - StaticApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/FacilityId'
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModalityAssignmentStatusUpdate'
+            examples:
+              assign:
+                value:
+                  assignment_status: assigned
+              unassign:
+                value:
+                  assignment_status: unassigned
+      responses:
+        '200':
+          description: |
+            Assignment status updated. Returns the device in the same body as the retrieve, with
+            the new `assignment_status`. A DICOM Enabler carries its `ip`, `store_scp` and
+            `modality_scp`; a DICOM device carries its `machine` and `dicom_enabler`. Pick an
+            example to see each.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Modality'
+              examples:
+                dicom_enabler_assigned:
+                  summary: DICOM Enabler assigned
+                  value:
+                    id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    device_name: CT Room 1 Enabler
+                    device_type: dicom-enabler
+                    store_scp:
+                      ae_title: STORESCP
+                      host: 0.0.0.0
+                      port: 2007
+                    modality_scp:
+                      ae_title: MODALITYSCP
+                      host: 0.0.0.0
+                      port: 2008
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: assigned
+                    last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                    ip: 192.168.1.40
+                dicom_unassigned:
+                  summary: DICOM device unassigned
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    device_name: Siemens SOMATOM CT
+                    device_type: dicom
+                    location:
+                      id: 0b5c8f2e-1d3a-4c6b-9e7f-2a1b3c4d5e6f
+                      name: CT Room 1
+                    device_status:
+                      status: active
+                      availability_status: available
+                    assignment_status: unassigned
+                    last_synced_at: "2026-11-06T09:15:30.123456+00:00"
+                    machine:
+                      ae_title: CT1
+                      modality: CT
+                      ip: 192.168.1.45
+                    dicom_enabler: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        '400':
+          description: '`assignment_status` is missing or not one of the allowed values'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "literal_error"
+                    loc: ["assignment_status"]
+                    msg: "Input should be 'assigned' or 'unassigned'"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            Facility not found, or the device is neither a DICOM Enabler nor a DICOM device of the
+            facility
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                errors:
+                  - type: "object_not_found"
+                    msg: "No Device matches the given query."
+        '409':
+          description: |
+            Assigning a device that is not `active` / `available`, including one that is already
+            `assigned`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Device is not active and available.
 
   # ---------- Imaging Study ----------
   /api/care_radiology/patient/{patient_id}/imaging_study/:
@@ -965,6 +1570,14 @@ components:
       schema:
         type: string
         format: uuid
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      description: Device external_id (UUID); the `id` of an entry in the modalities list
+      schema:
+        type: string
+        format: uuid
     Id:
       name: id
       in: path
@@ -1149,6 +1762,11 @@ components:
             body_site:
               type: string
               description: Name of the activity/procedure
+            body_site_id:
+              type: string
+              nullable: true
+              description: Code of the service request's `body_site`, as `procedure_id` is for the procedure
+              example: "39607008"
             procedure_id:
               type: string
               description: Name of the activity/procedure
@@ -1167,14 +1785,21 @@ components:
               format: date-time
             accession_number:
               type: string
-              nullable: true
+              nullable: false
               description: From ImagingStudy.accession_number
               example: "ACJAYCTO26000004"
+            referring_physician:
+              type: string
+              nullable: false
+              description: |
+                Full name of the doctor who raised the service request (its `requester`), for
+                Referring Physician's Name (0008,0090). Null when the request has no requester.
+              example: "Dr. Anjali Menon"
         locations:
           type: array
           description: |
-            activities whose current_location is one of the service request's
-            activity_definition.locations
+            The service request's `activity_definition.locations`, each with the DICOM devices
+            whose `current_location` it is
           items:
             $ref: '#/components/schemas/locations'
         facility:
@@ -1215,20 +1840,39 @@ components:
         name:
           type: string
           nullable: true
-          example: "CT"
+          description: Name of the location (room)
+          example: "CT Room 1"
         devices:
           type: array
+          description: |
+            All DICOM devices (`care_type: dicom`) whose `current_location` is this location;
+            with the `device` filter, only those connected to that DICOM Enabler.
           items:
             type: object
-            properties: 
+            properties:
                 id:
                   type: string
                   format: uuid
                   description: Device external_id
                 name:
                   type: string
-                  nullable: true
+                  description: |
+                    Registered name of the DICOM device, unique within the facility
                   example: "CT IMX001"
+                ae_title:
+                  type: string
+                  description: |
+                    The device's `machine.ae_title`: the AE title the machine sends as Calling AE
+                    when it queries the worklist or reports MPPS. Unique (case-insensitive) among
+                    the facility's DICOM devices.
+                  example: "CT1"
+                modality:
+                  type: string
+                  description: |
+                    The device's `machine.modality`: its DICOM modality code (DCM coding scheme),
+                    for Modality (0008,0060) in the worklist item. The DICOM Enabler can use it to
+                    match a C-FIND by its Modality query key.
+                  example: "CT"
 
     # ===================== Imaging Study =====================
     ImagingStudyListItem:
@@ -1687,6 +2331,309 @@ components:
           items:
             type: integer
           description: Full tags array on the ServiceRequest after this update
+
+    # ===================== Modalities =====================
+    DeviceStatus:
+      type: object
+      required: [status, availability_status]
+      properties:
+        status:
+          type: string
+          description: Lifecycle status of the device. Only `active` devices are listed or retrieved.
+          enum: [active, inactive, entered_in_error]
+          example: active
+        availability_status:
+          type: string
+          description: Physical availability of the device. Only `available` devices are listed or retrieved.
+          enum: [available, lost, damaged, destroyed]
+          example: available
+
+    DicomEndpoint:
+      type: object
+      required: [ae_title, port]
+      properties:
+        ae_title:
+          type: string
+          maxLength: 16
+          pattern: '^[\x20-\x5B\x5D-\x7E]+$'
+          description: |
+            DICOM AE value. Leading and trailing spaces are not significant and are removed on
+            save; a value of only spaces is rejected. Only printable ASCII is allowed, excluding
+            the backslash (`\`) and control characters.
+          example: STORESCP
+        host:
+          type: string
+          nullable: true
+          description: Host or IP address the SCP listens on. Null when not configured.
+          example: 0.0.0.0
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port the SCP listens on.
+          example: 2007
+
+    MachineEndpoint:
+      type: object
+      required: [ae_title, modality, ip]
+      properties:
+        ae_title:
+          type: string
+          maxLength: 16
+          pattern: '^[\x20-\x5B\x5D-\x7E]+$'
+          description: |
+            AE title the machine sends as Calling AE. The DICOM Enabler matches
+            `Association.CallingAE` against it to find the device. Unique (case-insensitive) among
+            the facility's DICOM devices; a duplicate is rejected with `400` on device create
+            or update. DICOM AE value: leading and trailing spaces are not significant and are
+            removed on save; a value of only spaces is rejected. Only printable ASCII is allowed,
+            excluding the backslash (`\`) and control characters.
+          example: CT1
+        modality:
+          type: string
+          description: |
+            DICOM modality code of the machine (DCM coding scheme), as sent in Modality (0008,0060).
+          enum: [AR, BMD, BDUS, EPS, CR, CT, DX, ECG, ES, XC, GM, HD, IO, IVOCT, IVUS, KER, LEN, MR, MG, NM,
+                 OAM, OCT, OPM, OP, OPR, OPT, OPV, OSS, PX, PT, RF, RG, SM, SRF, US, VA, XA]
+          example: CT
+        ip:
+          type: string
+          format: ipv4
+          description: |
+            IPv4 address the machine connects from. The DICOM Enabler can check it against the
+            association's peer address. Required on device create / update; a missing or non-IPv4
+            value returns `400`.
+          example: 192.168.1.45
+
+    DeviceLocation:
+      type: object
+      nullable: true
+      description: The device's `current_location` (its room). Null when the device has no location set.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: FacilityLocation external_id
+        name:
+          type: string
+          example: CT Room 1
+
+    DicomDeviceMetadata:
+      type: object
+      description: |
+        `care_metadata` of a CARE device with `care_type: dicom`, one per physical machine.
+        Sent at the top level of the body of the CARE device create / update API
+        (`/api/v1/facility/{facility_id}/device/`), and returned as `care_metadata` by its
+        list and retrieve.
+      required: [machine, dicom_enabler]
+      properties:
+        machine:
+          $ref: '#/components/schemas/MachineEndpoint'
+        dicom_enabler:
+          type: string
+          format: uuid
+          description: |
+            external_id of the one DICOM Enabler (`care_type: dicom-enabler`) of the same
+            facility the machine connects to. An id that is not one returns `400`.
+          example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        assignment_status:
+          type: string
+          description: |
+            Always `unassigned` on create, whatever is sent. On update, the new status; leave it
+            out to keep the current one. Sending the status the device already has returns `409`
+            (`Device is already assigned.` / `Device is already unassigned.`). Only an `active`,
+            `available` device can be set to `assigned`, otherwise `400`. Also changed with
+            `PATCH .../external/modalities/{device_id}/status/`.
+          enum: [unassigned, assigned]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            Read only: set to the current time on every successful
+            `PATCH .../external/modalities/{device_id}/status/`, whether or not the status
+            changes. Ignored when sent on device create / update, which keeps the current value.
+            Null when the device has never been synced that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
+
+    DicomEnablerDeviceMetadata:
+      type: object
+      description: |
+        `care_metadata` of a CARE device with `care_type: dicom-enabler`, one per DICOM
+        Enabler (usually per room). Sent at the top level of the body of the CARE device
+        create / update API, and returned as `care_metadata` by its list and retrieve. The rest
+        of the device (name, status, location and so on) is the usual CARE device.
+
+        **Delete** (`DELETE /api/v1/facility/{facility_id}/device/{id}/`): a DICOM Enabler that
+        still has DICOM devices (`care_type: dicom`, not deleted) whose `dicom_enabler` is its id
+        cannot be deleted; the delete returns `400` and changes nothing. Move those DICOM devices
+        to another DICOM Enabler, or delete them, first. This keeps every DICOM device connected
+        to an existing DICOM Enabler; otherwise its every update would fail with `DICOM Enabler
+        not found in the facility`. A DICOM Enabler with no DICOM devices is deleted as usual
+        (`204`), whatever its `assignment_status`. Error body:
+
+        ```json
+        {
+          "errors": [
+            {
+              "type": "validation_error",
+              "msg": "Move or delete the DICOM devices connected to this DICOM Enabler first."
+            }
+          ]
+        }
+        ```
+
+        Deleting a DICOM device has no such check.
+      required: [ip, store_scp, modality_scp]
+      properties:
+        ip:
+          type: string
+          format: ipv4
+          description: |
+            IPv4 address of the DICOM Enabler. A missing or non-IPv4 value returns `400`.
+          example: 192.168.1.40
+        store_scp:
+          description: Store SCP - where the DICOM Enabler sends images (C-STORE).
+          allOf:
+            - $ref: '#/components/schemas/DicomEndpoint'
+        modality_scp:
+          description: Modality SCP - the AE title and port the modalities use to query the worklist (MWL) and report MPPS.
+          allOf:
+            - $ref: '#/components/schemas/DicomEndpoint'
+        assignment_status:
+          type: string
+          description: |
+            Always `unassigned` on create, whatever is sent. On update, the new status; leave it
+            out to keep the current one. Sending the status the device already has returns `409`
+            (`Device is already assigned.` / `Device is already unassigned.`). Only an `active`,
+            `available` device can be set to `assigned`, otherwise `400`. Also changed with
+            `PATCH .../external/modalities/{device_id}/status/`.
+          enum: [unassigned, assigned]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            Read only: set to the current time on every successful
+            `PATCH .../external/modalities/{device_id}/status/`, whether or not the status
+            changes. Ignored when sent on device create / update, which keeps the current value.
+            Null when the device has never been synced that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
+
+    ModalityListItem:
+      type: object
+      description: |
+        Summary of a DICOM Enabler or DICOM device, as returned by the list. The fields of the
+        other `device_type` are left out of the response, not returned as null.
+      required:
+        - id
+        - device_name
+        - device_type
+        - location
+        - device_status
+        - assignment_status
+        - last_synced_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Device external_id
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        device_name:
+          type: string
+          example: Siemens SOMATOM CT
+        device_type:
+          type: string
+          description: The device's `care_type`.
+          enum: [dicom-enabler, dicom]
+          example: dicom
+        location:
+          $ref: '#/components/schemas/DeviceLocation'
+        device_status:
+          $ref: '#/components/schemas/DeviceStatus'
+        assignment_status:
+          type: string
+          description: |
+            Whether the device is assigned to a DICOM Enabler. Devices of either status can be
+            retrieved. Changed with `PATCH .../{device_id}/status/`.
+          enum: [unassigned, assigned]
+          example: unassigned
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When the device was last synced with `PATCH .../{device_id}/status/`, whether or not
+            the status changed. Null when it has never been synced that way.
+          example: "2026-11-06T09:15:30.123456+00:00"
+        machine:
+          description: |
+            DICOM device only. The machine as a caller: the AE title, modality and IP it uses
+            when it queries the worklist (C-FIND) or reports MPPS.
+          allOf:
+            - $ref: '#/components/schemas/MachineEndpoint'
+        dicom_enabler:
+          type: string
+          format: uuid
+          description: DICOM device only. external_id of the one DICOM Enabler it connects to.
+          example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        ip:
+          type: string
+          description: DICOM Enabler only. IP address of the DICOM Enabler.
+          example: 192.168.1.40
+
+    Modality:
+      description: |
+        Full details of a DICOM Enabler or DICOM device, as returned by the retrieve and the
+        assignment status update. The list item plus, for a DICOM Enabler, the DICOM endpoints.
+        A DICOM device has no DICOM endpoints, and they are left out of its response.
+      allOf:
+        - $ref: '#/components/schemas/ModalityListItem'
+        - type: object
+          properties:
+            store_scp:
+              description: DICOM Enabler only. Store SCP - where the DICOM Enabler sends images (C-STORE).
+              allOf:
+                - $ref: '#/components/schemas/DicomEndpoint'
+              example:
+                ae_title: STORESCP
+                host: 0.0.0.0
+                port: 2007
+            modality_scp:
+              description: |
+                DICOM Enabler only. Modality SCP - the AE title and port the modalities use to
+                query the worklist (MWL) and report MPPS.
+              allOf:
+                - $ref: '#/components/schemas/DicomEndpoint'
+              example:
+                ae_title: MODALITYSCP
+                host: 0.0.0.0
+                port: 2008
+
+    ModalityAssignmentStatusUpdate:
+      type: object
+      required:
+        - assignment_status
+      properties:
+        assignment_status:
+          type: string
+          enum: [assigned, unassigned]
+          description: |
+            `assigned` to assign the device to the calling DICOM Enabler; `unassigned` to
+            unassign it once no DICOM Enabler is using it.
+          example: assigned
+
+    ModalityList:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedMeta'
+        - type: object
+          properties:
+            results:
+              type: array
+              items:
+                $ref: '#/components/schemas/ModalityListItem'
 
     # ===================== Observation Result Template =====================
     ObservationTemplateField:
