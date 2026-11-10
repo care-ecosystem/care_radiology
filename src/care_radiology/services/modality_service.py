@@ -1,16 +1,36 @@
 import uuid
 
+from django.db import transaction
 from django.db.models import Q
-from rest_framework.exceptions import ValidationError
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.exceptions import APIException, ValidationError
 
 from care.emr.models.device import Device
 from care.emr.resources.device.spec import DeviceAvailabilityStatusChoices, DeviceStatusChoices
+from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     ASSIGNMENT_STATUS_ASSIGNED,
     ASSIGNMENT_STATUS_UNASSIGNED,
     DICOM_CARE_TYPE,
     DICOM_ENABLER_CARE_TYPE,
 )
+
+
+class AssignmentConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "conflict"
+
+
+def is_active_available(device):
+    return (
+        device.status == DeviceStatusChoices.active
+        and device.availability_status == DeviceAvailabilityStatusChoices.available
+    )
+
+
+def assignment_status_of(device):
+    return device.metadata.get("assignment_status") or ASSIGNMENT_STATUS_UNASSIGNED
 
 
 def active_available_devices(facility):
@@ -32,15 +52,19 @@ def dicom_enabler_id(facility, value):
     return enabler_id
 
 
-def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_enabler=None):
+def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_enabler=None, device_name=None):
     """
     The facility's active, available DICOM Enablers and DICOM devices, narrowed by the filters given.
     `dicom_enabler` gives only the DICOM devices connected to that DICOM Enabler, not the enabler itself.
+    `device_name` matches any part of the device name, ignoring case.
     """
     filters = Q(care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE])
 
     if care_type:
         filters &= Q(care_type=care_type)
+
+    if device_name:
+        filters &= Q(registered_name__icontains=device_name)
 
     # A device whose metadata has no assignment_status has never been assigned.
     if assignment_status == ASSIGNMENT_STATUS_ASSIGNED:
@@ -83,13 +107,34 @@ def get_modality(*, facility, device_id):
     )
     if device is None:
         raise ValidationError({"device_id": "No DICOM Enabler or DICOM device with this id in the facility."})
-    if (
-        device.status != DeviceStatusChoices.active
-        or device.availability_status != DeviceAvailabilityStatusChoices.available
-    ):
+    if not is_active_available(device):
         raise ValidationError({"device_id": "Device is not active and available."})
-    if (device.metadata or {}).get("assignment_status") == ASSIGNMENT_STATUS_ASSIGNED:
+    if assignment_status_of(device) == ASSIGNMENT_STATUS_ASSIGNED:
         raise ValidationError({"device_id": "Device is already assigned."})
+    return device
+
+
+def update_modality_assignment_status(*, facility, device_id, assignment_status):
+    """
+    Sets the assignment_status of a DICOM Enabler or DICOM device of the facility. A 404 when it is not
+    one; a 409 when assigning a device that is not active and available. Every call through here also sets
+    last_synced_at to now, including one that sends the status the device already has.
+    """
+    with transaction.atomic():
+        device = get_object_or_404(
+            Device.objects.select_for_update(of=("self",)).select_related("current_location"),
+            facility=facility,
+            care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE],
+            external_id=device_id,
+        )
+        if assignment_status == ASSIGNMENT_STATUS_ASSIGNED and not is_active_available(device):
+            raise AssignmentConflict("Device is not active and available.")
+        device.metadata = {
+            **device.metadata,
+            "assignment_status": assignment_status,
+            "last_synced_at": timezone.now().isoformat(),
+        }
+        device.save(update_fields=["metadata"])
     return device
 
 
@@ -98,7 +143,7 @@ def modality_list_items(devices):
 
 
 def modality_list_item(device):
-    metadata = device.metadata or {}
+    metadata = device.metadata
     location = device.current_location
     item = {
         "id": str(device.external_id),
@@ -109,12 +154,12 @@ def modality_list_item(device):
             "status": device.status,
             "availability_status": device.availability_status,
         },
-        "assignment_status": metadata.get("assignment_status") or ASSIGNMENT_STATUS_UNASSIGNED,
+        "assignment_status": assignment_status_of(device),
+        "last_synced_at": metadata.get("last_synced_at"),
     }
     # The fields of the other device type are left out, not returned as null.
     if device.care_type == DICOM_CARE_TYPE:
         machine = metadata.get("machine") or {}
-        # scheduled_station_ae_title is returned by the retrieve only
         item["machine"] = {
             "ae_title": machine.get("ae_title"),
             "modality": machine.get("modality"),
@@ -127,17 +172,10 @@ def modality_list_item(device):
 
 
 def modality_detail(device):
-    """
-    The list item plus the DICOM endpoints of a DICOM Enabler, or the Scheduled Station AE Title of a
-    DICOM device.
-    """
+    """The list item plus, for a DICOM Enabler, its DICOM endpoints. A DICOM device has nothing more."""
     item = modality_list_item(device)
-    metadata = device.metadata or {}
-    if device.care_type == DICOM_CARE_TYPE:
-        item["machine"]["scheduled_station_ae_title"] = (metadata.get("machine") or {}).get(
-            "scheduled_station_ae_title"
-        )
-    else:
+    if device.care_type == DICOM_ENABLER_CARE_TYPE:
+        metadata = device.metadata
         item["store_scp"] = metadata.get("store_scp")
         item["modality_scp"] = metadata.get("modality_scp")
     return item

@@ -1,7 +1,9 @@
+import ipaddress
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import UUID4, BaseModel, BeforeValidator, Field, IPvAnyAddress
+from pydantic import UUID4, BaseModel, BeforeValidator, Field
 
 
 class ModalityCodeChoices(str, Enum):
@@ -55,11 +57,9 @@ AETitle = Annotated[
 
 
 class ModalityMachineSpec(BaseModel):
-    # AE title the machine sends as Calling AE when it queries the worklist or reports MPPS
     ae_title: AETitle
     modality: ModalityCodeChoices
-    scheduled_station_ae_title: AETitle | None = None
-    ip: IPvAnyAddress | None = None
+    ip: ipaddress.IPv4Address
 
 
 class DicomEndpointSpec(BaseModel):
@@ -68,29 +68,43 @@ class DicomEndpointSpec(BaseModel):
     port: int = Field(ge=1, le=65535)
 
 
+AssignmentStatus = Literal["unassigned", "assigned"]
+
+
 class DicomDeviceMetadataWriteSpec(BaseModel):
     machine: ModalityMachineSpec
     dicom_enabler: UUID4
+    assignment_status: AssignmentStatus | None = None
 
 
 class DicomDeviceMetadataReadSpec(BaseModel):
     machine: ModalityMachineSpec | None = None
     dicom_enabler: UUID4 | None = None
+    assignment_status: AssignmentStatus | None = None
+    last_synced_at: datetime | None = None
 
 
 class DicomEnablerMetadataWriteSpec(BaseModel):
-    ip: IPvAnyAddress
+    ip: ipaddress.IPv4Address
     store_scp: DicomEndpointSpec
     modality_scp: DicomEndpointSpec
+    assignment_status: AssignmentStatus | None = None
 
 
 class DicomEnablerMetadataReadSpec(BaseModel):
-    ip: IPvAnyAddress | None = None
+    ip: ipaddress.IPv4Address | None = None
     store_scp: DicomEndpointSpec | None = None
     modality_scp: DicomEndpointSpec | None = None
+    assignment_status: AssignmentStatus | None = None
+    last_synced_at: datetime | None = None
 
 
 class ModalityListQuerySpec(BaseModel):
-    care_type: Literal["dicom_enabler", "dicom"] | None = None
-    assignment_status: Literal["unassigned", "assigned"] | None = None
+    care_type: Literal["dicom-enabler", "dicom"] | None = None
+    assignment_status: AssignmentStatus | None = None
     dicom_enabler: str | None = None
+    device_name: str | None = None
+
+
+class ModalityAssignmentStatusUpdateSpec(BaseModel):
+    assignment_status: AssignmentStatus
