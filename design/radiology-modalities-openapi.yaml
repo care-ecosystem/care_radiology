@@ -843,13 +843,15 @@ paths:
         `assignment_status` can also be changed by editing the device through the CARE device
         API (`care_metadata.assignment_status` on update); a device edit that leaves it out keeps it.
 
-        Setting the status the device already has returns `409`, through this endpoint and
-        through the CARE device API.
+        Sending the status the device already has is not an error through this endpoint: it
+        returns `200`, keeps the status and only updates `last_synced_at`. (Through the CARE
+        device API it still returns `409`.)
 
-        Every status change through this endpoint, to `assigned` or to `unassigned`, also sets
-        `last_synced_at` to the current time, so it is the time of the last sync. A `409` changes
-        nothing. A device whose status has never been changed through this endpoint has
-        `last_synced_at: null`. Changing the status through the CARE device API does not change it.
+        Every call to this endpoint that returns `200`, to `assigned` or to `unassigned` and
+        whether or not the status changes, sets `last_synced_at` to the current time, so it is the
+        time of the last sync. A `409` changes nothing. A device that has never been synced through
+        this endpoint has `last_synced_at: null`. Changing the status through the CARE device API
+        does not change it.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -953,22 +955,14 @@ paths:
                     msg: "No Device matches the given query."
         '409':
           description: |
-            The device already has the requested `assignment_status`, or is not `active` /
-            `available` (assigning only).
+            Assigning a device that is not `active` / `available`, including one that is already
+            `assigned`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              examples:
-                already_assigned:
-                  value:
-                    detail: Device is already assigned.
-                already_unassigned:
-                  value:
-                    detail: Device is already unassigned.
-                not_available:
-                  value:
-                    detail: Device is not active and available.
+              example:
+                detail: Device is not active and available.
 
   # ---------- Imaging Study ----------
   /api/care_radiology/patient/{patient_id}/imaging_study/:
@@ -2371,7 +2365,7 @@ components:
 
     MachineEndpoint:
       type: object
-      required: [ae_title, modality]
+      required: [ae_title, modality, ip]
       properties:
         ae_title:
           type: string
@@ -2394,10 +2388,11 @@ components:
           example: CT
         ip:
           type: string
-          nullable: true
+          format: ipv4
           description: |
-            IP address the machine connects from. The DICOM Enabler can check it against the
-            association's peer address. Null when not configured.
+            IPv4 address the machine connects from. The DICOM Enabler can check it against the
+            association's peer address. Required on device create / update; a missing or non-IPv4
+            value returns `400`.
           example: 192.168.1.45
 
     DeviceLocation:
@@ -2446,10 +2441,10 @@ components:
           nullable: true
           readOnly: true
           description: |
-            Read only: set to the current time on every status change (to `assigned` or
-            `unassigned`) with `PATCH .../external/modalities/{device_id}/status/`. Ignored when
-            sent on device create / update, which keeps the current value. Null when its status
-            has never been changed that way.
+            Read only: set to the current time on every successful
+            `PATCH .../external/modalities/{device_id}/status/`, whether or not the status
+            changes. Ignored when sent on device create / update, which keeps the current value.
+            Null when the device has never been synced that way.
           example: "2026-11-06T09:15:30.123456+00:00"
 
     DicomEnablerDeviceMetadata:
@@ -2484,7 +2479,9 @@ components:
       properties:
         ip:
           type: string
-          description: IP address of the DICOM Enabler.
+          format: ipv4
+          description: |
+            IPv4 address of the DICOM Enabler. A missing or non-IPv4 value returns `400`.
           example: 192.168.1.40
         store_scp:
           description: Store SCP - where the DICOM Enabler sends images (C-STORE).
@@ -2509,10 +2506,10 @@ components:
           nullable: true
           readOnly: true
           description: |
-            Read only: set to the current time on every status change (to `assigned` or
-            `unassigned`) with `PATCH .../external/modalities/{device_id}/status/`. Ignored when
-            sent on device create / update, which keeps the current value. Null when its status
-            has never been changed that way.
+            Read only: set to the current time on every successful
+            `PATCH .../external/modalities/{device_id}/status/`, whether or not the status
+            changes. Ignored when sent on device create / update, which keeps the current value.
+            Null when the device has never been synced that way.
           example: "2026-11-06T09:15:30.123456+00:00"
 
     ModalityListItem:
@@ -2559,8 +2556,8 @@ components:
           format: date-time
           nullable: true
           description: |
-            When the device's status was last changed (to `assigned` or `unassigned`) with
-            `PATCH .../{device_id}/status/`. Null when it has never been changed that way.
+            When the device was last synced with `PATCH .../{device_id}/status/`, whether or not
+            the status changed. Null when it has never been synced that way.
           example: "2026-11-06T09:15:30.123456+00:00"
         machine:
           description: |

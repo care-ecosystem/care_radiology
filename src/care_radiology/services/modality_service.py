@@ -30,7 +30,7 @@ def is_active_available(device):
 
 
 def assignment_status_of(device):
-    return (device.metadata or {}).get("assignment_status") or ASSIGNMENT_STATUS_UNASSIGNED
+    return device.metadata.get("assignment_status") or ASSIGNMENT_STATUS_UNASSIGNED
 
 
 def active_available_devices(facility):
@@ -113,8 +113,8 @@ def get_modality(*, facility, device_id):
 def update_modality_assignment_status(*, facility, device_id, assignment_status):
     """
     Sets the assignment_status of a DICOM Enabler or DICOM device of the facility. A 404 when it is not
-    one; a 409 when it already has that status, or when assigning a device that is not active and available.
-    Every status change through here also sets last_synced_at to now.
+    one; a 409 when assigning a device that is not active and available. Every call through here also sets
+    last_synced_at to now, including one that sends the status the device already has.
     """
     with transaction.atomic():
         device = get_object_or_404(
@@ -123,12 +123,10 @@ def update_modality_assignment_status(*, facility, device_id, assignment_status)
             care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE],
             external_id=device_id,
         )
-        if assignment_status_of(device) == assignment_status:
-            raise AssignmentConflict(f"Device is already {assignment_status}.")
         if assignment_status == ASSIGNMENT_STATUS_ASSIGNED and not is_active_available(device):
             raise AssignmentConflict("Device is not active and available.")
         device.metadata = {
-            **(device.metadata or {}),
+            **device.metadata,
             "assignment_status": assignment_status,
             "last_synced_at": timezone.now().isoformat(),
         }
@@ -141,7 +139,7 @@ def modality_list_items(devices):
 
 
 def modality_list_item(device):
-    metadata = device.metadata or {}
+    metadata = device.metadata
     location = device.current_location
     item = {
         "id": str(device.external_id),
@@ -173,7 +171,7 @@ def modality_detail(device):
     """The list item plus, for a DICOM Enabler, its DICOM endpoints. A DICOM device has nothing more."""
     item = modality_list_item(device)
     if device.care_type == DICOM_ENABLER_CARE_TYPE:
-        metadata = device.metadata or {}
+        metadata = device.metadata
         item["store_scp"] = metadata.get("store_scp")
         item["modality_scp"] = metadata.get("modality_scp")
     return item

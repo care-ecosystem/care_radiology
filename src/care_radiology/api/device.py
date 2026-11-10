@@ -43,7 +43,7 @@ def resolve_assignment_status(obj, requested, is_create):
 def write_metadata(obj, validated_data, is_create):
     metadata = validated_data.model_dump(mode="json")
     metadata["assignment_status"] = resolve_assignment_status(obj, validated_data.assignment_status, is_create)
-    last_synced_at = None if is_create else (obj.metadata or {}).get("last_synced_at")
+    last_synced_at = obj.metadata.get("last_synced_at")
     if last_synced_at:
         metadata["last_synced_at"] = last_synced_at
     obj.metadata = metadata
@@ -59,11 +59,12 @@ class ModalityDevice(DeviceTypeBase):
         )
         if other_dicom_devices.filter(metadata__machine__ae_title__iexact=validated_data.machine.ae_title).exists():
             raise ValidationError("A modality device with this AE title already exists in the facility")
-        if not Device.objects.filter(
+        enabler = Device.objects.filter(
             facility_id=obj.facility_id,
             care_type=DICOM_ENABLER_CARE_TYPE,
             external_id=validated_data.dicom_enabler,
-        ).exists():
+        ).first()
+        if enabler is None:
             raise ValidationError("DICOM Enabler not found in the facility")
         return write_metadata(obj, validated_data, is_create)
 
@@ -82,7 +83,8 @@ class ModalityDevice(DeviceTypeBase):
 
 class ModalityEnablerDevice(DeviceTypeBase):
     def _write_metadata(self, request_data, obj, is_create):
-        return write_metadata(obj, DicomEnablerMetadataWriteSpec(**request_data), is_create)
+        validated_data = DicomEnablerMetadataWriteSpec(**request_data)
+        return write_metadata(obj, validated_data, is_create)
 
     def handle_create(self, request_data, obj):
         return self._write_metadata(request_data, obj, is_create=True)

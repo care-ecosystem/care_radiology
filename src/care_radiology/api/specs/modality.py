@@ -1,8 +1,9 @@
+import ipaddress
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import UUID4, BaseModel, BeforeValidator, Field, IPvAnyAddress
+from pydantic import UUID4, BaseModel, BeforeValidator, Field
 
 
 class ModalityCodeChoices(str, Enum):
@@ -58,7 +59,7 @@ AETitle = Annotated[
 class ModalityMachineSpec(BaseModel):
     ae_title: AETitle
     modality: ModalityCodeChoices
-    ip: IPvAnyAddress | None = None
+    ip: ipaddress.IPv4Address
 
 
 class DicomEndpointSpec(BaseModel):
@@ -84,14 +85,14 @@ class DicomDeviceMetadataReadSpec(BaseModel):
 
 
 class DicomEnablerMetadataWriteSpec(BaseModel):
-    ip: IPvAnyAddress
+    ip: ipaddress.IPv4Address
     store_scp: DicomEndpointSpec
     modality_scp: DicomEndpointSpec
     assignment_status: AssignmentStatus | None = None
 
 
 class DicomEnablerMetadataReadSpec(BaseModel):
-    ip: IPvAnyAddress | None = None
+    ip: ipaddress.IPv4Address | None = None
     store_scp: DicomEndpointSpec | None = None
     modality_scp: DicomEndpointSpec | None = None
     assignment_status: AssignmentStatus | None = None
