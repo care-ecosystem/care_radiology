@@ -71,20 +71,18 @@ paths:
         - External APIs
       summary: Get modality worklist
       description: |
-        Returns the active service requests of the facility given in the path, formatted for a
-        DICOM modality worklist. Optionally filter by DICOM Enabler (`device`) or date
-        range (`created_date_after`, `created_date_before`). When several are given, all apply.
-        Any further filtering, such as by modality, is done by the DICOM Enabler itself.
+        Returns the active service requests of the facility given in the path for one DICOM
+        Enabler (`device`, required), formatted for a DICOM modality worklist. Optionally filter
+        by date range (`created_date_after`, `created_date_before`); when given, these apply as
+        well. Any further filtering, such as by modality, is done by the DICOM Enabler itself.
 
         Each entry carries the `accession_number` from `ImagingStudy`, the
         `referring_physician` who raised the service request, and the `locations` of the
-        service request's `activity_definition.locations`. Each location lists all the DICOM
+        service request's `activity_definition.locations`. Each location lists the DICOM
         devices (`care_type: dicom`) whose `current_location` it is, with their registered name,
-        `ae_title` and `modality`: every device in a location
-        shares the same worklist. Devices are fetched in one query
-        for the whole worklist.
+        `ae_title` and `modality`: every device in a location shares the same worklist.
 
-        With `device`, the worklist is that DICOM Enabler's: its locations are the
+        The worklist is the DICOM Enabler's: its locations are the
         `current_location` of every `active`, `available` DICOM device whose `dicom_enabler` is
         this id. The DICOM Enabler's own `current_location` is not used. Only requests that
         include at least one of these locations are returned; each lists only these locations,
@@ -123,13 +121,13 @@ paths:
         - $ref: '#/components/parameters/FacilityId'
         - name: device
           in: query
-          required: false
+          required: true
           description: |
-            Optional. external_id of a DICOM Enabler (`care_type: dicom-enabler`) of the
+            Required. external_id of a DICOM Enabler (`care_type: dicom-enabler`) of the
             facility, the `device_id` it got from `GET .../external/modalities/`. Only service
             requests whose `activity_definition.locations` include the `current_location` of one
-            of its DICOM devices. Returns `400` when it is not a valid UUID, or not the id of a
-            DICOM Enabler of the facility.
+            of its DICOM devices. Returns `400` when it is missing, not a valid UUID, or not the
+            id of a DICOM Enabler of the facility.
           schema:
             type: string
             format: uuid
@@ -168,12 +166,19 @@ paths:
                       $ref: '#/components/schemas/WorklistEntry'
         '400':
           description: |
-            `device` is not a valid UUID, or not the id of a DICOM Enabler of the facility.
+            `device` is missing, not a valid UUID, or not the id of a DICOM Enabler of the facility.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
               examples:
+                device_missing:
+                  summary: device is not given
+                  value:
+                    errors:
+                      - type: "missing"
+                        loc: ["device"]
+                        msg: "Field required"
                 device_invalid:
                   summary: device is not a valid UUID
                   value:
@@ -470,8 +475,8 @@ paths:
            `GET .../external/modalities/?dicom_enabler={device_id}` for the DICOM devices
            connected to it.
         3. The emulator calls `PATCH .../{device_id}/status/` with
-           `assignment_status: assigned`; the device is then listed as `assigned` and can no
-           longer be retrieved.
+           `assignment_status: assigned`; the device is then listed as `assigned` and can
+           still be retrieved.
         4. When no DICOM Enabler uses it any more, `PATCH .../{device_id}/status/` with
            `assignment_status: unassigned` unassigns it.
 
@@ -720,10 +725,10 @@ paths:
         `modality_scp`); a DICOM device is returned as in the list. The DICOM devices connected to an enabler are separate devices and are not included;
         list them with `GET .../external/modalities/?dicom_enabler={device_id}`.
 
-        Only devices that are `active`, `available` and not assigned can be retrieved. Any other
-        `device_id` returns `400` with a message saying why: it is not a valid UUID, it is not a
-        DICOM Enabler or DICOM device of the facility, the device is not `active` / `available`,
-        or it is already assigned.
+        Only devices that are `active` and `available` can be retrieved, whether `assigned` or
+        `unassigned`. Any other `device_id` returns `400` with a message saying why: it is not a
+        valid UUID, it is not a DICOM Enabler or DICOM device of the facility, or the device is
+        not `active` / `available`.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
         No user permission check is performed.
@@ -736,7 +741,7 @@ paths:
       responses:
         '200':
           description: |
-            Device details. `assignment_status` is always `unassigned`. A DICOM Enabler carries
+            Device details, with its current `assignment_status`. A DICOM Enabler carries
             its `ip`, `store_scp` and `modality_scp`; a DICOM device carries its
             `machine` and `dicom_enabler`. Pick an example to see each.
           content:
@@ -789,7 +794,7 @@ paths:
         '400':
           description: |
             `device_id` is not a valid UUID, is not a DICOM Enabler or DICOM device of the facility,
-            or the device is not `active` / `available` or is already assigned.
+            or the device is not `active` / `available`.
           content:
             application/json:
               schema:
@@ -816,13 +821,6 @@ paths:
                       - type: "validation_error"
                         msg:
                           device_id: "Device is not active and available."
-                already_assigned:
-                  summary: The device is already assigned
-                  value:
-                    errors:
-                      - type: "validation_error"
-                        msg:
-                          device_id: "Device is already assigned."
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -846,11 +844,11 @@ paths:
         is, with the `device_id` taken from the `GET .../external/modalities/` response. Called
         when the device starts or stops being used:
         - `assigned`: called after the user selects the device in the Modality Emulator. It is
-          then listed with `assignment_status: assigned` and the retrieve returns `400` for it.
-          Only an `active`, `available` device can be assigned.
+          then listed and retrieved with `assignment_status: assigned`. Only an `active`,
+          `available` device can be assigned.
         - `unassigned`: called when no DICOM Enabler is using it any more, whatever its
-          `status`. It is then listed with `assignment_status: unassigned` and can be retrieved
-          and assigned again.
+          `status`. It is then listed and retrieved with `assignment_status: unassigned` and can
+          be assigned again.
 
         `assignment_status` can also be changed by editing the device through the CARE device
         API (`care_metadata.assignment_status` on update); a device edit that leaves it out keeps it.
@@ -2558,9 +2556,8 @@ components:
         assignment_status:
           type: string
           description: |
-            Whether the device is assigned to a DICOM Enabler. `unassigned` devices can be
-            retrieved and assigned; for `assigned` ones the retrieve returns `400`. Changed with
-            `PATCH .../{device_id}/status/`.
+            Whether the device is assigned to a DICOM Enabler. Devices of either status can be
+            retrieved. Changed with `PATCH .../{device_id}/status/`.
           enum: [unassigned, assigned]
           example: unassigned
         last_synced_at:

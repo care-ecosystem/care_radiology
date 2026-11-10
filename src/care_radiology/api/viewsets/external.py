@@ -29,7 +29,7 @@ from care_radiology.services.modality_service import (
     modality_list_items,
     update_modality_assignment_status,
 )
-from care_radiology.services.worklist_service import get_service_requests, worklist_entries
+from care_radiology.services.worklist_service import dicom_enabler_devices, get_service_requests, worklist_entries
 from care_radiology.utils.dicom import parse_date
 
 
@@ -49,8 +49,9 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         facility = self.get_facility()
         query = DicomWorklistQuerySpec(**request.query_params.dict())
 
+        enabler_devices = dicom_enabler_devices(facility, query.device)
         service_requests = get_service_requests(
-            modality=query.modality,
+            location_ids={device.current_location_id for device in enabler_devices},
             from_date=parse_date(query.created_date_after),
             to_date=parse_date(query.created_date_before),
             facility=facility,
@@ -61,7 +62,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             data={
                 "count": paginator.count,
                 "status": "success",
-                "results": worklist_entries(page, modality=query.modality),
+                "results": worklist_entries(page, enabler_devices),
             },
             status=status.HTTP_200_OK,
         )

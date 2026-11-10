@@ -12,11 +12,16 @@ class WorklistDeviceSpec(EMRResource):
 
     id: UUID4 | None = None
     name: str | None = None
+    ae_title: str | None = None
+    modality: str | None = None
 
     @classmethod
     def perform_extra_serialization(cls, mapping, obj, *args, **kwargs):
         super().perform_extra_serialization(mapping, obj)
         mapping["name"] = obj.registered_name
+        machine = obj.metadata.get("machine") or {}
+        mapping["ae_title"] = machine.get("ae_title")
+        mapping["modality"] = machine.get("modality")
 
 
 class WorklistLocationSpec(EMRResource):
@@ -33,7 +38,7 @@ class WorklistLocationSpec(EMRResource):
 
 
 class DicomWorklistQuerySpec(BaseModel):
-    modality: str | None = None
+    device: str
     created_date_after: str | None = None
     created_date_before: str | None = None
 
