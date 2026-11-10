@@ -449,11 +449,13 @@ paths:
         machines of a room.
 
         Lists the devices of both types whose `status` is `active` and `availability_status` is
-        `available`, including those already assigned. It can be filtered in two ways:
+        `available`, including those already assigned. It can be filtered in three ways:
         - **By type and status**: `care_type` limits it to one type and `assignment_status` to
           assigned or unassigned devices.
         - **By DICOM Enabler**: `dicom_enabler` returns only the DICOM devices connected to that
           DICOM Enabler; the enabler itself is not included.
+        - **By name**: `device_name` returns only devices whose name contains that text,
+          ignoring case.
 
         Each entry carries the device's summary, its `device_type` and its `assignment_status`;
         the fields of the other type are left out. The DICOM endpoints of a DICOM Enabler are
@@ -510,6 +512,16 @@ paths:
             type: string
             format: uuid
             example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        - name: device_name
+          in: query
+          required: false
+          description: |
+            Optional. Only devices whose `device_name` contains this text, ignoring case (`ct`
+            matches `Siemens SOMATOM CT`). Works for both types and combines with the other
+            filters, e.g. `care_type=dicom&dicom_enabler={id}&device_name=ct`.
+          schema:
+            type: string
+            example: somatom
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:

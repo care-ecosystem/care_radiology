@@ -77,6 +77,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             care_type=query.care_type,
             assignment_status=query.assignment_status,
             dicom_enabler=query.dicom_enabler,
+            device_name=query.device_name,
         )
         paginator = CareLimitOffsetPagination()
         page = paginator.paginate_queryset(devices, request, view=self)

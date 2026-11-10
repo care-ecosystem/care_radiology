@@ -52,15 +52,19 @@ def dicom_enabler_id(facility, value):
     return enabler_id
 
 
-def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_enabler=None):
+def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_enabler=None, device_name=None):
     """
     The facility's active, available DICOM Enablers and DICOM devices, narrowed by the filters given.
     `dicom_enabler` gives only the DICOM devices connected to that DICOM Enabler, not the enabler itself.
+    `device_name` matches any part of the device name, ignoring case.
     """
     filters = Q(care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE])
 
     if care_type:
         filters &= Q(care_type=care_type)
+
+    if device_name:
+        filters &= Q(registered_name__icontains=device_name)
 
     # A device whose metadata has no assignment_status has never been assigned.
     if assignment_status == ASSIGNMENT_STATUS_ASSIGNED:
