@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import UUID4, BaseModel, BeforeValidator, Field, IPvAnyAddress
 
@@ -88,3 +88,9 @@ class DicomEnablerMetadataReadSpec(BaseModel):
     ip: IPvAnyAddress | None = None
     store_scp: DicomEndpointSpec | None = None
     modality_scp: DicomEndpointSpec | None = None
+
+
+class ModalityListQuerySpec(BaseModel):
+    care_type: Literal["dicom_enabler", "dicom"] | None = None
+    assignment_status: Literal["unassigned", "assigned"] | None = None
+    dicom_enabler: str | None = None
