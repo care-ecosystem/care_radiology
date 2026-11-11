@@ -1,10 +1,12 @@
-from typing import Literal
+from datetime import datetime
+from typing import Annotated, Literal
 
-from pydantic import UUID4, BaseModel
+from pydantic import UUID4, BaseModel, BeforeValidator
 
 from care.emr.models.device import Device
 from care.emr.models.location import FacilityLocation
 from care.emr.resources.base import EMRResource
+from care_radiology.utils.dicom import parse_date
 
 
 class WorklistDeviceSpec(EMRResource):
@@ -37,10 +39,13 @@ class WorklistLocationSpec(EMRResource):
         mapping["devices"] = list(devices)
 
 
+WorklistDate = Annotated[datetime | None, BeforeValidator(parse_date)]
+
+
 class DicomWorklistQuerySpec(BaseModel):
-    device: str
-    created_date_after: str | None = None
-    created_date_before: str | None = None
+    device_id: str | None = None
+    created_date_after: WorklistDate = None
+    created_date_before: WorklistDate = None
 
 
 class WebhookMppsSpec(BaseModel):

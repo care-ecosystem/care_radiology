@@ -154,10 +154,12 @@ def d_datetime_to_iso(da, tm=None, tz_offset=None):
 def parse_date(date_str):
     if not date_str:
         return None
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return datetime.strptime(date_str, "%Y-%m-%d")
+    for date_format in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, date_format)
+        except ValueError:
+            pass
+    raise ValueError("Must be a date (YYYY-MM-DD) or a date and time (YYYY-MM-DD HH:MM:SS)")
 
 
 def encode_file_multipart_related(file_obj):
