@@ -42,13 +42,21 @@ def active_available_devices(facility):
 
 
 def dicom_enabler_id(facility, value, field):
-    """`value` as the external_id of a DICOM Enabler of the facility, or a 400 naming the query parameter `field`."""
+    """
+    `value` as the external_id of an active, available DICOM Enabler of the facility, or a 400 naming the query
+    parameter `field`.
+    """
     try:
         enabler_id = uuid.UUID(value)
     except ValueError:
         raise ValidationError({field: "Must be a valid DICOM Enabler id."}) from None
-    if not Device.objects.filter(facility=facility, care_type=DICOM_ENABLER_CARE_TYPE, external_id=enabler_id).exists():
+    enabler = Device.objects.filter(
+        facility=facility, care_type=DICOM_ENABLER_CARE_TYPE, external_id=enabler_id
+    ).first()
+    if enabler is None:
         raise ValidationError({field: "No DICOM Enabler with this id in the facility."})
+    if not is_active_available(enabler):
+        raise ValidationError({field: "Device is not active and available."})
     return enabler_id
 
 
@@ -76,7 +84,7 @@ def get_modalities(*, facility, care_type=None, assignment_status=None, dicom_en
         )
 
     if dicom_enabler is not None:
-        enabler_id = dicom_enabler_id(facility, dicom_enabler, field="dicom_enabler")
+        enabler_id = dicom_enabler_id(facility, dicom_enabler, field="device_id")
         filters &= Q(care_type=DICOM_CARE_TYPE, metadata__dicom_enabler=str(enabler_id))
 
     return (
@@ -115,7 +123,7 @@ def get_modality(*, facility, device_id):
 def update_modality_assignment_status(*, facility, device_id, assignment_status):
     """
     Sets the assignment_status of a DICOM Enabler or DICOM device of the facility. A 404 when it is not
-    one; a 409 when assigning a device that is not active and available. Every call through here also sets
+    one; a 400 when assigning a device that is not active and available. Every call through here also sets
     last_synced_at to now, including one that sends the status the device already has.
     """
     with transaction.atomic():
@@ -126,7 +134,7 @@ def update_modality_assignment_status(*, facility, device_id, assignment_status)
             external_id=device_id,
         )
         if assignment_status == ASSIGNMENT_STATUS_ASSIGNED and not is_active_available(device):
-            raise AssignmentConflict("Device is not active and available.")
+            raise ValidationError({"device_id": "Device is not active and available."})
         device.metadata = {
             **device.metadata,
             "assignment_status": assignment_status,

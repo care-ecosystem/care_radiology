@@ -9,35 +9,39 @@ from care_radiology.api.specs.external import WorklistDeviceSpec, WorklistLocati
 from care_radiology.constants import DICOM_CARE_TYPE
 from care_radiology.models.imaging_study import ImagingStudy
 from care_radiology.services.modality_service import active_available_devices, dicom_enabler_id
+from care_radiology.settings import plugin_settings as settings
 from care_radiology.utils.patient import get_patient_uhid
 
 logger = logging.getLogger(__name__)
 
 
-def dicom_enabler_devices(facility, device):
+def worklist_devices(facility, device_id=None):
     """
-    The active, available DICOM devices connected to the DICOM Enabler `device` that are located in a room,
-    by name, or a 400 naming the `device` filter when it is not a DICOM Enabler of the facility.
+    The facility's active, available DICOM devices that are located in a room, by name. With `device_id`, only
+    those connected to that DICOM Enabler, or a 400 naming the `device_id` filter when it is not a DICOM Enabler
+    of the facility.
     """
-    enabler_id = dicom_enabler_id(facility, device, field="device")
-    return list(
-        active_available_devices(facility)
-        .filter(care_type=DICOM_CARE_TYPE, metadata__dicom_enabler=str(enabler_id), current_location__isnull=False)
-        .order_by("registered_name", "id")
-    )
+    devices = active_available_devices(facility).filter(care_type=DICOM_CARE_TYPE, current_location__isnull=False)
+    if device_id is not None:
+        enabler_id = dicom_enabler_id(facility, device_id, field="device_id")
+        devices = devices.filter(metadata__dicom_enabler=str(enabler_id))
+    return list(devices.order_by("registered_name", "id"))
 
 
-def get_service_requests(*, facility, location_ids, from_date=None, to_date=None):
+def get_service_requests(*, facility, location_ids=None, from_date=None, to_date=None):
     """
-    The facility's active service requests whose activity definition lists one of `location_ids`; none when it
-    is empty.
+    The facility's active service requests of the radiology category. With `location_ids`, only those whose
+    activity definition lists one of them; none when it is empty.
     """
     filters = Q(
         facility=facility,
         status="active",
         deleted=False,
-        activity_definition__locations__overlap=list(location_ids),
+        category=settings.CARE_RADIOLOGY_RADIOLOGY_CATEGORY,
     )
+
+    if location_ids is not None:
+        filters &= Q(activity_definition__locations__overlap=list(location_ids))
 
     if from_date:
         filters &= Q(created_date__gte=from_date)
@@ -65,19 +69,20 @@ def get_service_requests(*, facility, location_ids, from_date=None, to_date=None
     )
 
 
-def worklist_entries(service_requests, enabler_devices):
+def worklist_entries(service_requests, devices, location_ids=None):
     """
-    Each service request with those of its activity definition's locations that `enabler_devices` (the DICOM
-    devices of one DICOM Enabler) are in, each location with these devices.
+    Each service request with its activity definition's locations, each location with those of `devices` that
+    are in it. With `location_ids`, only those of its locations.
     """
-    location_ids = {
+    sr_location_ids = {
         location_id
         for sr in service_requests
         for location_id in (sr.activity_definition.locations if sr.activity_definition else [])
-    } & {device.current_location_id for device in enabler_devices}
+    }
+    location_ids = sr_location_ids if location_ids is None else sr_location_ids & location_ids
 
     devices_by_location = defaultdict(list)
-    for device in enabler_devices:
+    for device in devices:
         if device.current_location_id in location_ids:
             devices_by_location[device.current_location_id].append(WorklistDeviceSpec.serialize(device).to_json())
 

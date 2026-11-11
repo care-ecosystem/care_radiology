@@ -102,7 +102,7 @@ class DicomEnablerMetadataReadSpec(BaseModel):
 class ModalityListQuerySpec(BaseModel):
     care_type: Literal["dicom-enabler", "dicom"] | None = None
     assignment_status: AssignmentStatus | None = None
-    dicom_enabler: str | None = None
+    device_id: str | None = None
     device_name: str | None = None
 
 

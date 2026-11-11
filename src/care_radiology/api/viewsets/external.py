@@ -29,8 +29,7 @@ from care_radiology.services.modality_service import (
     modality_list_items,
     update_modality_assignment_status,
 )
-from care_radiology.services.worklist_service import dicom_enabler_devices, get_service_requests, worklist_entries
-from care_radiology.utils.dicom import parse_date
+from care_radiology.services.worklist_service import get_service_requests, worklist_devices, worklist_entries
 
 
 @extend_schema(tags=["Radiology: External"])
@@ -49,11 +48,12 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         facility = self.get_facility()
         query = DicomWorklistQuerySpec(**request.query_params.dict())
 
-        enabler_devices = dicom_enabler_devices(facility, query.device)
+        devices = worklist_devices(facility, query.device_id)
+        location_ids = {device.current_location_id for device in devices} if query.device_id is not None else None
         service_requests = get_service_requests(
-            location_ids={device.current_location_id for device in enabler_devices},
-            from_date=parse_date(query.created_date_after),
-            to_date=parse_date(query.created_date_before),
+            location_ids=location_ids,
+            from_date=query.created_date_after,
+            to_date=query.created_date_before,
             facility=facility,
         )
         paginator = CareLimitOffsetPagination()
@@ -62,7 +62,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             data={
                 "count": paginator.count,
                 "status": "success",
-                "results": worklist_entries(page, enabler_devices),
+                "results": worklist_entries(page, devices, location_ids),
             },
             status=status.HTTP_200_OK,
         )
@@ -77,7 +77,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             facility=facility,
             care_type=query.care_type,
             assignment_status=query.assignment_status,
-            dicom_enabler=query.dicom_enabler,
+            dicom_enabler=query.device_id,
             device_name=query.device_name,
         )
         paginator = CareLimitOffsetPagination()
