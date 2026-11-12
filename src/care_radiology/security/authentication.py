@@ -11,6 +11,9 @@ _RATE_LIMIT_SETTING_BY_URL_NAME = {
     "radiology_external-worklist": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST",
     "radiology_external-upload": "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL",
     "radiology_external-update-status": "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS",
+    "radiology_external-modalities": "CARE_RADIOLOGY_RATE_LIMIT_MODALITIES",
+    "radiology_external-modality-detail": "CARE_RADIOLOGY_RATE_LIMIT_MODALITIES",
+    "radiology_external-modality-status": "CARE_RADIOLOGY_RATE_LIMIT_MODALITIES",
 }
 
 

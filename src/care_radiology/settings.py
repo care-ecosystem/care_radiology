@@ -149,6 +149,7 @@ DEFAULTS = {
     "CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS": "200/m",
     "CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST": "100/m",
     "CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL": "2000/m",
+    "CARE_RADIOLOGY_RATE_LIMIT_MODALITIES": "50/m",
     # Auto-archive DICOM studies older than N days (by created_date). Disabled by default -
     # nothing is archived automatically unless CARE_RADIOLOGY_STUDY_AUTO_ARCHIVE_ENABLED is set.
     "CARE_RADIOLOGY_STUDY_AUTO_ARCHIVE_ENABLED": False,
