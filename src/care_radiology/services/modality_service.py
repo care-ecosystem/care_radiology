@@ -120,7 +120,7 @@ def get_modality(*, facility, device_id):
     return device
 
 
-def update_modality_assignment_status(*, facility, device_id, assignment_status):
+def update_modality_assignment_status(*, facility, device_id, assignment_status, user):
     """
     Sets the assignment_status of a DICOM Enabler or DICOM device of the facility. A 404 when it is not
     one; a 400 when assigning a device that is not active and available. Every call through here also sets
@@ -140,7 +140,8 @@ def update_modality_assignment_status(*, facility, device_id, assignment_status)
             "assignment_status": assignment_status,
             "last_synced_at": timezone.now().isoformat(),
         }
-        device.save(update_fields=["metadata"])
+        device.updated_by = user
+        device.save(update_fields=["metadata", "updated_by", "modified_date"])
     return device
 
 

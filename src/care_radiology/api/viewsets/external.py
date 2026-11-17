@@ -1,22 +1,22 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
 from care.emr.api.viewsets.base import emr_exception_handler
+from care.emr.models.device import Device
 from care.facility.models import Facility
+from care.security.authorization import AuthorizationController
 from care.utils.pagination.care_pagination import CareLimitOffsetPagination
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.api.specs.external import DicomWorklistQuerySpec, WebhookMppsSpec
 from care_radiology.api.specs.modality import ModalityAssignmentStatusUpdateSpec, ModalityListQuerySpec
 from care_radiology.api.viewsets.mixins import DicomUploadMixin
+from care_radiology.constants import DICOM_CARE_TYPE, DICOM_ENABLER_CARE_TYPE
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
-from care_radiology.security.authentication import (
-    StaticAPIKeyAuthentication,
-    StaticAPIKeyAuthorization,
-)
+from care_radiology.security.authentication import ServiceAccountTokenAuthentication
 from care_radiology.services.dicom_service import (
     imaging_study_for_accession_number,
     process_mpps_webhook,
@@ -34,8 +34,7 @@ from care_radiology.services.worklist_service import get_service_requests, workl
 
 @extend_schema(tags=["Radiology: External"])
 class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
-    authentication_classes = [StaticAPIKeyAuthentication]
-    permission_classes = [StaticAPIKeyAuthorization]
+    authentication_classes = [ServiceAccountTokenAuthentication]
 
     def get_exception_handler(self):
         return emr_exception_handler
@@ -43,9 +42,18 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     def get_facility(self):
         return get_object_or_404(Facility, external_id=self.kwargs["facility_external_id"])
 
+    def authorize_read(self, facility):
+        if not AuthorizationController.call("can_read_radiology_data", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to read radiology data for this facility")
+
+    def authorize_write(self, facility):
+        if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to write radiology data for this facility")
+
     @action(detail=False, methods=["get"])
     def worklist(self, request, *args, **kwargs):
         facility = self.get_facility()
+        self.authorize_read(facility)
         query = DicomWorklistQuerySpec(**request.query_params.dict())
 
         devices = worklist_devices(facility, query.device_id)
@@ -80,6 +88,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             dicom_enabler=query.device_id,
             device_name=query.device_name,
         )
+        devices = AuthorizationController.call("get_accessible_radiology_devices", devices, request.user, facility)
         paginator = CareLimitOffsetPagination()
         page = paginator.paginate_queryset(devices, request, view=self)
         return paginator.get_paginated_response(modality_list_items(page))
@@ -88,6 +97,8 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     @action(detail=False, methods=["get"], url_path=r"modalities/(?P<device_id>[^/.]+)", url_name="modality-detail")
     def retrieve_modality(self, request, device_id, *args, **kwargs):
         device = get_modality(facility=self.get_facility(), device_id=device_id)
+        if not AuthorizationController.call("can_read_device", request.user, device):
+            raise PermissionDenied("You do not have permission to read this device")
         return Response(modality_detail(device), status=status.HTTP_200_OK)
 
     # Assigns a DICOM Enabler or DICOM device once it is picked in the Modality Emulator, or unassigns it.
@@ -100,17 +111,27 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     )
     def update_modality_status(self, request, device_id, *args, **kwargs):
         facility = self.get_facility()
+        device = get_object_or_404(
+            Device,
+            facility=facility,
+            care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE],
+            external_id=device_id,
+        )
+        if not AuthorizationController.call("can_manage_device", request.user, device):
+            raise PermissionDenied("You do not have permission to update this device")
         request_data = ModalityAssignmentStatusUpdateSpec.model_validate(request.data)
         device = update_modality_assignment_status(
             facility=facility,
             device_id=device_id,
             assignment_status=request_data.assignment_status,
+            user=request.user,
         )
         return Response(modality_detail(device), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="imaging_study/upload")
     def upload(self, request, *args, **kwargs):
         facility = self.get_facility()
+        self.authorize_write(facility)
         dcm_file = request.FILES.get("file")
         if not dcm_file:
             raise ValidationError({"file": "This value is required"})
@@ -119,15 +140,20 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         # rejected before it reaches the PACS.
         accession_number = read_file_accession_number(dcm_file)
         imaging_study = imaging_study_for_accession_number(accession_number, facility)
-        return self.handle_dicom_upload(imaging_study, dcm_file)
+        return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
 
     # MPPS status update, mapped to an imaging study status and, optionally, a ServiceRequest tag.
     @extend_schema(request=WebhookMppsSpec)
     @action(detail=False, methods=["patch"], url_path="imaging_study/status")
     def update_status(self, request, *args, **kwargs):
         facility = self.get_facility()
+        self.authorize_write(facility)
         request_data = WebhookMppsSpec.model_validate(request.data)
-        RadiologyWebhookLogs.objects.create(raw_data=request.data, type="MPPS")
+        RadiologyWebhookLogs.objects.create(
+            raw_data=request.data, type="MPPS", created_by=request.user, updated_by=request.user
+        )
 
-        record = process_mpps_webhook(facility, request_data.service_request_id, request_data.study_status)
+        record = process_mpps_webhook(
+            facility, request_data.service_request_id, request_data.study_status, user=request.user
+        )
         return Response(record, status=status.HTTP_200_OK)

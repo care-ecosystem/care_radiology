@@ -153,7 +153,7 @@ Uploading a study again after it was archived creates a new, active CARE study r
 
 ### External APIs
 
-Machine-to-machine endpoints for the modality worklist server and other integrations live under `facility/{facility_id}/external/`. They authenticate with the static API key: the `Authorization` header must equal `CARE_RADIOLOGY_WEBHOOK_SECRET` (`401` otherwise). Each is rate-limited per source IP by its own setting (django-ratelimit rate strings):
+Machine-to-machine endpoints for the modality worklist server and other integrations live under `facility/{facility_id}/external/`. They authenticate with a CARE service account token (from `users/{username}/generate_service_account_token/`) sent as `Authorization: Token <token>`. A missing or unknown token, or one whose user is not an active, undeleted service account, is a `401`. The service account must also be a member of the facility with radiology read access (`can_read_radiology_data`) for `GET` endpoints and radiology write access (`can_write_radiology_data`) for the others, or the request is a `403`. The modalities endpoints instead use core's device permissions and are scoped by department: a DICOM Enabler or DICOM device is reached through its managing organization (or its current location's organization), so the service account lists and retrieves only the devices it has `can_list_devices` on there, and updates only those it has `can_manage_devices` on. A device in another department is left out of the list and is a `403` on retrieve and update. Each is rate-limited per source IP by its own setting (django-ratelimit rate strings):
 
 | Endpoint | Purpose | Rate-limit setting (default) |
 | --- | --- | --- |
