@@ -124,6 +124,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             facility=facility,
             device_id=device_id,
             assignment_status=request_data.assignment_status,
+            user=request.user,
         )
         return Response(modality_detail(device), status=status.HTTP_200_OK)
 
@@ -139,7 +140,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         # rejected before it reaches the PACS.
         accession_number = read_file_accession_number(dcm_file)
         imaging_study = imaging_study_for_accession_number(accession_number, facility)
-        return self.handle_dicom_upload(imaging_study, dcm_file)
+        return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
 
     # MPPS status update, mapped to an imaging study status and, optionally, a ServiceRequest tag.
     @extend_schema(request=WebhookMppsSpec)
@@ -148,7 +149,11 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
         facility = self.get_facility()
         self.authorize_write(facility)
         request_data = WebhookMppsSpec.model_validate(request.data)
-        RadiologyWebhookLogs.objects.create(raw_data=request.data, type="MPPS")
+        RadiologyWebhookLogs.objects.create(
+            raw_data=request.data, type="MPPS", created_by=request.user, updated_by=request.user
+        )
 
-        record = process_mpps_webhook(facility, request_data.service_request_id, request_data.study_status)
+        record = process_mpps_webhook(
+            facility, request_data.service_request_id, request_data.study_status, user=request.user
+        )
         return Response(record, status=status.HTTP_200_OK)

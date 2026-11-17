@@ -336,7 +336,7 @@ def imaging_study_for_encounter(encounter):
     return imaging_study
 
 
-def process_mpps_webhook(facility, service_request_id, study_status):
+def process_mpps_webhook(facility, service_request_id, study_status, user):
     """
     Sets the service request's imaging study to `study_status`, then adds the facility tag whose
     display is the status's MPPS status (Scan Started, Scan Completed or Scan Cancelled) to the
@@ -379,7 +379,8 @@ def process_mpps_webhook(facility, service_request_id, study_status):
             try:
                 tags.append(tag_config.id)
                 service_request.tags = tags
-                service_request.save(update_fields=["tags"])
+                service_request.updated_by = user
+                service_request.save(update_fields=["tags", "updated_by", "modified_date"])
             except Exception as e:
                 logger.exception("[MPPS] Error updating tags")
                 raise APIException("Error updating tags") from e
