@@ -1,5 +1,9 @@
+from django.db.models import Q
+
+from care.emr.models.organization import FacilityOrganizationUser
 from care.security.authorization import AuthorizationController
 from care.security.authorization.base import AuthorizationHandler
+from care.security.permissions.device import DevicePermissions
 from care.security.permissions.diagnostic_report import DiagnosticReportPermissions
 from care_radiology.security.permissions import RadiologyPermissions
 
@@ -33,6 +37,20 @@ class RadiologyAccess(AuthorizationHandler):
             permissions=[RadiologyPermissions.can_write_radiology_data.name],
             user=user,
             facility=facility,
+        )
+
+    def get_accessible_radiology_devices(self, qs, user, facility):
+        if user.is_superuser:
+            return qs
+        roles = self.get_role_from_permissions([DevicePermissions.can_list_devices.name])
+        organization_ids = list(
+            FacilityOrganizationUser.objects.filter(
+                user=user, organization__facility=facility, role_id__in=roles
+            ).values_list("organization_id", flat=True)
+        )
+        return qs.filter(
+            Q(facility_organization_cache__overlap=organization_ids)
+            | Q(current_location__facility_organization_cache__overlap=organization_ids)
         )
 
 
