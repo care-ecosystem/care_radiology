@@ -986,8 +986,10 @@ paths:
         Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
         on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed. Each
         has the encounter and service request from core base specs only; use the retrieve for
-        the full service request. Archived DICOM studies are always left out of `studies[]`
-        here; `include_archived` is only supported on the retrieve.
+        the full service request. Filter on archive state with `is_archived`: `true` lists only
+        imaging studies that have archived DICOM studies, with only those in `studies[]`;
+        `false` leaves archived studies out; omitted returns both (like the Files tab). Each
+        study carries the archive fields. `include_archived` is only supported on the retrieve.
         To fetch a single one by service request, use
         `GET /patient/{patient_id}/imaging_study/{service_request_id}/`.
 
@@ -1002,6 +1004,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/IsArchived'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -1012,7 +1015,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing'
+          description: '`encounter` is missing, or `is_archived` is not `true`/`false`'
           content:
             application/json:
               schema:
@@ -1023,6 +1026,12 @@ paths:
                     errors:
                       - type: "validation_error"
                         msg: "encounter is required"
+                invalid_is_archived:
+                  value:
+                    errors:
+                      - type: "validation_error"
+                        loc: ["is_archived"]
+                        msg: "Must be true or false"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1595,6 +1604,15 @@ components:
       schema:
         type: boolean
         default: false
+    IsArchived:
+      name: is_archived
+      in: query
+      description: |
+        Filter the list by archive state (list only). `true` returns only imaging studies that
+        have archived DICOM studies, with only the archived ones in `studies[]`; `false` returns
+        active studies only; omitted returns both.
+      schema:
+        type: boolean
     Limit:
       name: limit
       in: query
@@ -1878,7 +1896,7 @@ components:
     ImagingStudyListItem:
       type: object
       description: |
-        List body of an ImagingStudy (`ImagingStudyReadSpec`). `encounter` and `service_request`
+        List body of an ImagingStudy (`ImagingStudyArchivedReadSpec`). `encounter` and `service_request`
         use core base specs; the newest report and the studies are prefetched for the whole
         page, and each study's DCM4CHEE details come from a one-hour cache.
       required:
@@ -1908,11 +1926,11 @@ components:
           type: array
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
-            DCM4CHEE (cached for an hour). Archived studies are always left out of the list
-            response. A study DCM4CHEE cannot return, or whose details fail to
+            DCM4CHEE (cached for an hour). Archived studies are included unless
+            `is_archived=false`, and are the only ones when `is_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
-            $ref: '#/components/schemas/ImagingStudyListDicomStudy'
+            $ref: '#/components/schemas/ImagingStudyDicomStudy'
 
     ImagingStudyServiceRequest:
       type: object
@@ -2151,9 +2169,9 @@ components:
     ImagingStudyDicomStudy:
       type: object
       description: |
-        A DICOM study as returned inside the ImagingStudy retrieve and PATCH bodies
-        (`DicomStudyRetrieveSpec`): the list item plus the archive fields, since the retrieve can
-        include archived studies.
+        A DICOM study as returned inside the ImagingStudy list, retrieve and PATCH bodies
+        (`DicomStudyRetrieveSpec`): the base study fields plus the archive fields, since these
+        responses can include archived studies.
       properties:
         id:
           type: string

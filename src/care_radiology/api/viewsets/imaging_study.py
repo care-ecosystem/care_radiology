@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django_filters import rest_framework as filters
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -19,6 +19,7 @@ from care.security.authorization.base import AuthorizationController
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.api.specs.dicom import DicomStudyArchiveSpec, DicomStudyArchiveStateSpec
 from care_radiology.api.specs.imaging_study import (
+    ImagingStudyArchivedReadSpec,
     ImagingStudyReadSpec,
     ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
@@ -78,21 +79,31 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
         page = paginator.paginate_queryset(self.filter_queryset(self.get_queryset()), request)
         pacs_details = fetch_studies([study for imaging_study in page for study in imaging_study.studies.all()])
         return paginator.get_paginated_response(
-            [ImagingStudyReadSpec.serialize(obj, pacs_details=pacs_details).to_json() for obj in page]
+            [ImagingStudyArchivedReadSpec.serialize(obj, pacs_details=pacs_details).to_json() for obj in page]
         )
+
+    def _bool_param(self, name, default=False):
+        value = self.request.query_params.get(name)
+        if value is None:
+            return default
+        value = value.lower()
+        if value not in ("true", "false"):
+            raise ValidationError({name: "Must be true or false"})
+        return value == "true"
 
     def get_queryset(self):
         patient = self.get_patient()
 
-        include_archived = False
-        if self.action == "retrieve":
-            value = self.request.query_params.get("include_archived", "false").lower()
-            if value not in ("true", "false"):
-                raise ValidationError({"include_archived": "Must be true or false"})
-            include_archived = value == "true"
+        include_archived = self.action == "retrieve" and self._bool_param("include_archived")
+        # On list, is_archived=true returns only archived studies, is_archived=false only active ones,
+        # and leaving it out returns both (like the Files tab).
+        is_archived = self._bool_param("is_archived", default=None) if self.action == "list" else False
+        archived_only = is_archived is True
         studies = DicomStudy.objects.select_related("created_by", "updated_by").order_by("-created_date")
-        if include_archived:
+        if include_archived or self.action == "list" and is_archived is None:
             studies = studies.select_related("archived_by")
+        elif archived_only:
+            studies = studies.select_related("archived_by").filter(is_archived=True)
         else:
             studies = studies.filter(is_archived=False)
 
@@ -118,6 +129,11 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             raise PermissionDenied("You do not have permission to view service requests for this encounter")
         if not AuthorizationController.call("can_read_radiology_data", self.request.user, encounter.facility):
             raise PermissionDenied("You do not have permission to read radiology data for this facility")
+
+        if archived_only:
+            queryset = queryset.filter(
+                Exists(DicomStudy.objects.filter(imaging_study=OuterRef("pk"), is_archived=True))
+            )
 
         return queryset.filter(
             Q(service_request__isnull=True)
