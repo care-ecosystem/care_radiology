@@ -30,6 +30,7 @@ class DICOM_TAG(Enum):
     TimezoneOffsetFromUTC = "00080201"
     AccessionNumber = "00080050"
     PatientID = "00100020"
+    IssuerOfPatientID = "00100021"
 
     SeriesInstanceUID = "0020000E"
     SeriesModality = "00080060"
@@ -97,6 +98,7 @@ def d_query_study(study_uid):
                     DICOM_TAG.StudyDate.value,
                     DICOM_TAG.StudyTime.value,
                     DICOM_TAG.TimezoneOffsetFromUTC.value,
+                    DICOM_TAG.IssuerOfPatientID.value,
                 ]
             ),
         },

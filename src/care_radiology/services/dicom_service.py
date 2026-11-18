@@ -624,15 +624,18 @@ def move_study_to_linked_patient(study_uid):
 def move_study_to_patient(study_uid, patient):
     """
     Files the study under the CARE patient in the PACS: a patient with the CARE patient's UHID (or external id)
-    as Patient ID is created there with their name unless one exists, then the study is moved to it. A study
-    already under that Patient ID is left as it is. Returns whether the study was moved.
+    as Patient ID is created there with their name unless one exists, then the study is moved to it, and the
+    patient it was under is deleted once it has no studies left. A study already under that Patient ID is left
+    as it is. Returns whether the study was moved.
     """
     patient_id = get_dicom_patient_id(patient)
     study = d_query_study(study_uid)
     if study is None:
         raise PacsPatientSyncError(f"Study {study_uid} not found in PACS")
-    if patient_id in d_find(study, DICOM_TAG.PatientID.value):
+    prior_patient_ids = d_find(study, DICOM_TAG.PatientID.value)
+    if patient_id in prior_patient_ids:
         return False
+    prior_issuers = d_find(study, DICOM_TAG.IssuerOfPatientID.value)
 
     existing = _pacs_patient_request(
         "GET",
@@ -663,4 +666,43 @@ def move_study_to_patient(study_uid, patient):
     )
     cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
     logger.info("Moved DICOM study %s to PACS patient %s", study_uid, patient_id)
+
+    if prior_patient_ids and prior_issuers:
+        _delete_empty_pacs_patient(prior_patient_ids[0], prior_issuers[0], study_uid)
+    else:
+        logger.info("DICOM study %s was under a patient without an issuer, not deleting it from PACS", study_uid)
     return True
+
+
+def _delete_empty_pacs_patient(patient_id, issuer, study_uid):
+    """
+    Deletes the PACS patient `patient_id` of `issuer` if it has no studies. Patient IDs such as placeholders are
+    shared by several PACS patients, so the patient is named by its ID and issuer, which only one of them has.
+    A failure is logged rather than raised, since the study has already been moved.
+    """
+    pid_with_issuer = f"{patient_id}^^^{issuer}"
+    try:
+        studies = requests.get(
+            f"{DCM4CHEE_BASEURL}/rs/studies",
+            params={"PatientID": patient_id, "IssuerOfPatientID": issuer, "limit": 1},
+            headers={"Accept": "application/dicom+json"},
+            timeout=_pacs_delete_timeout(),
+        )
+        if studies.status_code != 204:
+            return
+        response = requests.delete(
+            f"{DCM4CHEE_BASEURL}/rs/patients/{quote(pid_with_issuer, safe='')}", timeout=_pacs_delete_timeout()
+        )
+    except requests.RequestException:
+        logger.warning("Could not delete PACS patient %s after moving study %s", pid_with_issuer, study_uid)
+        return
+    if response.ok:
+        logger.info("Deleted empty PACS patient %s after moving study %s", pid_with_issuer, study_uid)
+    else:
+        logger.warning(
+            "Could not delete PACS patient %s after moving study %s: %s %s",
+            pid_with_issuer,
+            study_uid,
+            response.status_code,
+            response.text[:200],
+        )
