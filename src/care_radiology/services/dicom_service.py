@@ -597,6 +597,30 @@ def _pacs_patient_request(method, url, study_uid, step, **kwargs):
     return response
 
 
+def move_study_to_linked_patient(study_uid):
+    """
+    Moves the study in the PACS to the patient of its active CARE record from an upload without a service
+    request, found under the Study UID lock so that an archive or a re-upload for another patient cannot change
+    it in the meantime. Returns whether the study was moved.
+    """
+    with transaction.atomic():
+        _lock_study_uid(study_uid)
+        dicom_study = (
+            DicomStudy.objects.filter(
+                dicom_study_uid=study_uid,
+                is_archived=False,
+                deleted=False,
+                imaging_study__service_request__isnull=True,
+            )
+            .select_related("imaging_study__patient")
+            .first()
+        )
+        if dicom_study is None:
+            logger.info("DICOM study %s has no active study uploaded without a service request, not moved", study_uid)
+            return False
+        return move_study_to_patient(study_uid, dicom_study.imaging_study.patient)
+
+
 def move_study_to_patient(study_uid, patient):
     """
     Files the study under the CARE patient in the PACS: a patient with the CARE patient's UHID (or external id)

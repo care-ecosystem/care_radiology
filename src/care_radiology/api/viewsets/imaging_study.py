@@ -162,7 +162,7 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             sync_enabled = plugin_settings.CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED
             if sync_enabled and response.status_code == status.HTTP_201_CREATED:
                 study_uid = response.data["study_uid"]
-                transaction.on_commit(lambda: schedule_move_study_to_care_patient(study_uid, patient.id))
+                transaction.on_commit(lambda: schedule_move_study_to_care_patient(study_uid))
             return response
 
         service_request = get_object_or_404(
