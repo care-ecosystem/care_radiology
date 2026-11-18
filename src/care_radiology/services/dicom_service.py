@@ -24,6 +24,7 @@ from care_radiology.constants import (
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.settings import plugin_settings
+from care_radiology.utils.patient import get_dicom_patient_id
 from care_radiology.utils.dicom import (
     DICOM_TAG,
     DicomParseError,
@@ -35,7 +36,6 @@ from care_radiology.utils.dicom import (
     encode_file_multipart_related,
     read_accession_number,
     read_sop_instance_uid,
-    replace_patient_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,11 +90,8 @@ def _upload_lock_timeout():
     )
 
 
-def upload_dicom_file(imaging_study, dcm_file, user=None, patient_id=None):
-    """
-    Upload a DICOM file after rejecting an existing SOP Instance UID. With `patient_id`, the file's
-    Patient ID (0010,0020) is set to it after the duplicate check, before the file is sent to the PACS.
-    """
+def upload_dicom_file(imaging_study, dcm_file, user=None):
+    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
@@ -128,12 +125,6 @@ def upload_dicom_file(imaging_study, dcm_file, user=None, patient_id=None):
                     status_code=409,
                     extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
                 )
-
-        if patient_id is not None:
-            try:
-                dcm_file = replace_patient_id(dcm_file, patient_id)
-            except (DicomParseError, ValueError) as e:
-                raise DicomUploadError(f"Could not set the Patient ID in the DICOM file: {e}", status_code=400) from e
 
         body, content_type = encode_file_multipart_related(dcm_file)
 
@@ -591,3 +582,61 @@ def archive_study(study, archive_reason, archived_by=None):
         study.save(update_fields=update_fields)
 
     return study
+
+
+class PacsPatientSyncError(Exception):
+    pass
+
+
+def _pacs_patient_request(method, url, study_uid, step, **kwargs):
+    response = requests.request(method, url, timeout=_pacs_delete_timeout(), **kwargs)
+    if not response.ok:
+        raise PacsPatientSyncError(
+            f"Failed to {step} for study {study_uid} in PACS: {response.status_code} {response.text[:200]}"
+        )
+    return response
+
+
+def move_study_to_patient(study_uid, patient):
+    """
+    Files the study under the CARE patient in the PACS: a patient with the CARE patient's UHID (or external id)
+    as Patient ID is created there with their name unless one exists, then the study is moved to it. A study
+    already under that Patient ID is left as it is. Returns whether the study was moved.
+    """
+    patient_id = get_dicom_patient_id(patient)
+    study = d_query_study(study_uid)
+    if study is None:
+        raise PacsPatientSyncError(f"Study {study_uid} not found in PACS")
+    if patient_id in d_find(study, DICOM_TAG.PatientID.value):
+        return False
+
+    existing = _pacs_patient_request(
+        "GET",
+        f"{DCM4CHEE_BASEURL}/rs/patients",
+        study_uid,
+        "look up patient",
+        params={"PatientID": patient_id},
+        headers={"Accept": "application/dicom+json"},
+    )
+    if existing.status_code == 204:
+        _pacs_patient_request(
+            "POST",
+            f"{DCM4CHEE_BASEURL}/rs/patients",
+            study_uid,
+            "create patient",
+            json={
+                DICOM_TAG.PatientID.value: {"vr": "LO", "Value": [patient_id]},
+                "00100010": {"vr": "PN", "Value": [{"Alphabetic": patient.name}]},
+            },
+            headers={"Content-Type": "application/dicom+json"},
+        )
+    _pacs_patient_request(
+        "POST",
+        f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/patient",
+        study_uid,
+        "move study to patient",
+        params={"PatientID": patient_id},
+    )
+    cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
+    logger.info("Moved DICOM study %s to PACS patient %s", study_uid, patient_id)
+    return True

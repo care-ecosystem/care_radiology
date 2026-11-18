@@ -29,6 +29,7 @@ class DICOM_TAG(Enum):
     StudyTime = "00080030"
     TimezoneOffsetFromUTC = "00080201"
     AccessionNumber = "00080050"
+    PatientID = "00100020"
 
     SeriesInstanceUID = "0020000E"
     SeriesModality = "00080060"
@@ -356,32 +357,6 @@ def _skip_value(stream, tag, length):
         length -= len(_read_exact(stream, min(length, _INFLATE_CHUNK_SIZE)))
 
 
-def _read_file_meta(file_obj):
-    """
-    Reads a DICOM Part 10 file's preamble and file meta group from the start, returning the
-    dataset's transfer syntax UID and leaving `file_obj` at the start of the dataset.
-    """
-    file_obj.seek(0)
-    if file_obj.read(132)[128:] != b"DICM":
-        raise DicomParseError("Not a DICOM Part 10 file (missing DICM preamble)")
-
-    transfer_syntax = None
-    while True:
-        dataset_start = file_obj.tell()
-        group = file_obj.read(2)
-        if len(group) < 2:
-            raise DicomParseError("File contains no dataset after the file meta group")
-        file_obj.seek(dataset_start)
-        if int.from_bytes(group, "little") != FILE_META_GROUP:
-            return transfer_syntax
-        tag, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
-        if tag == TRANSFER_SYNTAX_UID:
-            value = _read_value(file_obj, tag, length)
-            transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
-        else:
-            _skip_value(file_obj, tag, length)
-
-
 def read_accession_number(file_obj):
     """
     Read Accession Number (0008,0050) from a DICOM Part 10 file.
@@ -389,7 +364,25 @@ def read_accession_number(file_obj):
     cannot be parsed far enough to determine the value.
     """
     try:
-        transfer_syntax = _read_file_meta(file_obj)
+        file_obj.seek(0)
+        if file_obj.read(132)[128:] != b"DICM":
+            raise DicomParseError("Not a DICOM Part 10 file (missing DICM preamble)")
+
+        transfer_syntax = None
+        while True:
+            dataset_start = file_obj.tell()
+            group = file_obj.read(2)
+            if len(group) < 2:
+                raise DicomParseError("File contains no dataset after the file meta group")
+            file_obj.seek(dataset_start)
+            if int.from_bytes(group, "little") != FILE_META_GROUP:
+                break
+            tag, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
+            if tag == TRANSFER_SYNTAX_UID:
+                value = _read_value(file_obj, tag, length)
+                transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
+            else:
+                _skip_value(file_obj, tag, length)
 
         stream = file_obj
         if transfer_syntax == DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN:
@@ -420,144 +413,4 @@ def read_accession_number(file_obj):
         raise DicomParseError(f"Could not parse DICOM file: {e}") from e
     finally:
         # encode_file_multipart_related() reads the file from the start.
-        file_obj.seek(0)
-
-
-PATIENT_ID = (0x0010, 0x0020)
-PATIENT_GROUP_LENGTH = (0x0010, 0x0000)
-ITEM = (0xFFFE, 0xE000)
-ITEM_DELIMITATION_ITEM = (0xFFFE, 0xE00D)
-SEQUENCE_DELIMITATION_ITEM = (0xFFFE, 0xE0DD)
-
-_MAX_PATIENT_ID_LENGTH = 64
-
-
-def _read_tag(stream, byteorder):
-    data = _read_exact(stream, 4)
-    return int.from_bytes(data[0:2], byteorder), int.from_bytes(data[2:4], byteorder)
-
-
-def _skip_element_value(stream, tag, length, implicit_vr, byteorder):
-    """Moves past an element's value, walking the items of an undefined-length sequence to find its end."""
-    if length != UNDEFINED_LENGTH:
-        _skip_value(stream, tag, length)
-        return
-    while True:
-        item_tag = _read_tag(stream, byteorder)
-        item_length = int.from_bytes(_read_exact(stream, 4), byteorder)
-        if item_tag == SEQUENCE_DELIMITATION_ITEM:
-            return
-        if item_tag != ITEM:
-            raise DicomParseError(f"Expected a sequence item in ({tag[0]:04X},{tag[1]:04X})")
-        if item_length != UNDEFINED_LENGTH:
-            _skip_value(stream, item_tag, item_length)
-            continue
-        while True:
-            element_start = stream.tell()
-            if _read_tag(stream, byteorder) == ITEM_DELIMITATION_ITEM:
-                _read_exact(stream, 4)
-                break
-            stream.seek(element_start)
-            nested_tag, nested_length = _read_element_header(stream, implicit_vr, byteorder)
-            _skip_element_value(stream, nested_tag, nested_length, implicit_vr, byteorder)
-
-
-def _encode_patient_id(patient_id):
-    if len(patient_id) > _MAX_PATIENT_ID_LENGTH or "\\" in patient_id:
-        raise ValueError(f"'{patient_id}' cannot be a DICOM Patient ID: at most 64 characters and no backslash")
-    if not (patient_id.isascii() and patient_id.isprintable()):
-        raise ValueError(f"'{patient_id}' cannot be a DICOM Patient ID: only printable ASCII characters")
-    value = patient_id.encode("ascii")
-    return value + b" " if len(value) % 2 else value
-
-
-def _set_patient_id(dataset, value, implicit_vr, byteorder):
-    """
-    `dataset` with Patient ID (0010,0020) set to the encoded `value`, replacing the element in place or
-    adding it where it belongs in tag order, or None when it already holds that value. A (0010,0000)
-    group length, if present, is adjusted to match.
-    """
-    stream = io.BytesIO(dataset)
-    group_length_at = None
-    while True:
-        start = stream.tell()
-        header = _read_element_header(stream, implicit_vr, byteorder)
-        if header is not None:
-            tag, length = header
-            value_start = stream.tell()
-            if tag == PATIENT_GROUP_LENGTH:
-                group_length_at = value_start
-            if tag == PATIENT_ID:
-                _check_defined_length(tag, length)
-                end = value_start + length
-                if end > len(dataset):
-                    raise DicomParseError("File ends in the middle of a data element")
-                if dataset[value_start:end].strip(b" \x00") == value.strip(b" "):
-                    return None
-                long_form = implicit_vr or dataset[start + 4 : start + 6] in _EXPLICIT_VR_LONG_FORM_VRS
-                length_width = 4 if long_form else 2
-                element = dataset[start : value_start - length_width] + len(value).to_bytes(length_width, byteorder)
-                element += value
-                old_size = end - start
-                break
-        if header is None or tag > PATIENT_ID:
-            element = PATIENT_ID[0].to_bytes(2, byteorder) + PATIENT_ID[1].to_bytes(2, byteorder)
-            if implicit_vr:
-                element += len(value).to_bytes(4, byteorder)
-            else:
-                element += b"LO" + len(value).to_bytes(2, byteorder)
-            element += value
-            end = start
-            old_size = 0
-            break
-        _skip_element_value(stream, tag, length, implicit_vr, byteorder)
-
-    result = bytearray(dataset[:start] + element + dataset[end:])
-    if group_length_at is not None:
-        group_length = int.from_bytes(result[group_length_at : group_length_at + 4], byteorder)
-        new_group_length = group_length + len(element) - old_size
-        result[group_length_at : group_length_at + 4] = new_group_length.to_bytes(4, byteorder)
-    return bytes(result)
-
-
-def replace_patient_id(file_obj, patient_id):
-    """
-    A copy of the DICOM Part 10 file `file_obj`, as a new file object, with Patient ID (0010,0020) set to
-    `patient_id`, added when the file has none. Everything else is kept byte for byte, apart from a deflated
-    dataset, which is compressed again. A file that already has that Patient ID is returned as it is.
-    Raises ValueError for a `patient_id` that is not a valid Patient ID, and DicomParseError when the file
-    cannot be parsed up to where the Patient ID goes.
-    """
-    value = _encode_patient_id(patient_id)
-    try:
-        transfer_syntax = _read_file_meta(file_obj)
-        dataset_start = file_obj.tell()
-        file_obj.seek(0)
-        data = file_obj.read()
-
-        dataset = data[dataset_start:]
-        deflated = transfer_syntax == DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN
-        if deflated:
-            dataset = zlib.decompress(dataset, -zlib.MAX_WBITS)
-
-        dataset = _set_patient_id(
-            dataset,
-            value,
-            implicit_vr=transfer_syntax == IMPLICIT_VR_LITTLE_ENDIAN,
-            byteorder="big" if transfer_syntax == EXPLICIT_VR_BIG_ENDIAN else "little",
-        )
-        if dataset is None:
-            return file_obj
-
-        if deflated:
-            compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
-            dataset = compressor.compress(dataset) + compressor.flush()
-        return io.BytesIO(data[:dataset_start] + dataset)
-    except DicomParseError as e:
-        logger.warning("Could not set Patient ID in DICOM file: %s", e.message)
-        raise
-    except (OSError, UnicodeDecodeError, zlib.error) as e:
-        logger.warning("Could not set Patient ID in DICOM file: %s", e)
-        raise DicomParseError(f"Could not parse DICOM file: {e}") from e
-    finally:
         file_obj.seek(0)
