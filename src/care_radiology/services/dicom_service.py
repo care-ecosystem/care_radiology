@@ -35,6 +35,7 @@ from care_radiology.utils.dicom import (
     encode_file_multipart_related,
     read_accession_number,
     read_sop_instance_uid,
+    replace_patient_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,8 +90,11 @@ def _upload_lock_timeout():
     )
 
 
-def upload_dicom_file(imaging_study, dcm_file, user=None):
-    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
+def upload_dicom_file(imaging_study, dcm_file, user=None, patient_id=None):
+    """
+    Upload a DICOM file after rejecting an existing SOP Instance UID. With `patient_id`, the file's
+    Patient ID (0010,0020) is set to it after the duplicate check, before the file is sent to the PACS.
+    """
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
@@ -124,6 +128,12 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                     status_code=409,
                     extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
                 )
+
+        if patient_id is not None:
+            try:
+                dcm_file = replace_patient_id(dcm_file, patient_id)
+            except (DicomParseError, ValueError) as e:
+                raise DicomUploadError(f"Could not set the Patient ID in the DICOM file: {e}", status_code=400) from e
 
         body, content_type = encode_file_multipart_related(dcm_file)
 

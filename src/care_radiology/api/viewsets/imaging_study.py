@@ -35,6 +35,7 @@ from care_radiology.services.dicom_service import (
     validate_accession_number,
 )
 from care_radiology.settings import plugin_settings
+from care_radiology.utils.patient import get_dicom_patient_id
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,12 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
 
         if not service_request_id:
             self.authorize_write_radiology_data(encounter.facility)
-            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dcm_file, user=request.user)
+            return self.handle_dicom_upload(
+                imaging_study_for_encounter(encounter),
+                dcm_file,
+                user=request.user,
+                patient_id=get_dicom_patient_id(patient),
+            )
 
         service_request = get_object_or_404(
             ServiceRequest.objects.select_related("facility", "imaging_study"),

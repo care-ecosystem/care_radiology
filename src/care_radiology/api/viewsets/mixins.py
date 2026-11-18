@@ -5,9 +5,9 @@ from care_radiology.services.dicom_service import DicomUploadError, StudyLinkCon
 
 
 class DicomUploadMixin:
-    def handle_dicom_upload(self, imaging_study, dcm_file, user=None):
+    def handle_dicom_upload(self, imaging_study, dcm_file, user=None, patient_id=None):
         try:
-            result = upload_dicom_file(imaging_study, dcm_file, user=user)
+            result = upload_dicom_file(imaging_study, dcm_file, user=user, patient_id=patient_id)
         except DicomUploadError as e:
             return Response(
                 data={"errors": [{"type": "dicom_upload_error", "msg": e.message, **e.extra}]},
