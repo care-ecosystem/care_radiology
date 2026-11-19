@@ -72,10 +72,7 @@ class PacsDeleteError(Exception):
 
 def _snapshot_study_details(study):
     """
-    Keeps the PACS details of a study that is about to be deleted from the PACS on the record
-    itself, so that it can still be listed with its date, description and counts once its files
-    are gone. Must be read before the delete; afterwards the PACS has nothing left to answer
-    with. A study the PACS cannot answer for leaves the record with whatever it already holds.
+    Keeps the PACS details of a study that is about to be deleted from the PACS on the record in meta
     """
     try:
         details = fetch_study(study)
@@ -96,10 +93,7 @@ def _snapshot_study_details(study):
 
 def _clear_study_uid(study):
     """
-    Drops the Study Instance UID of a study whose files were deleted from the PACS, so that nothing
-    queries the PACS for it again. A record with no Study UID has nothing left in the PACS; it is
-    still listed as archived, with its archive reason and the counts held on the record itself. The
-    UID is kept in `meta` as `archived_study_uid`, so the record still says which study was deleted.
+    Drops the Study Instance UID of a study whose files were deleted from the PACS, added reference in meta
     """
     if not study.dicom_study_uid:
         return

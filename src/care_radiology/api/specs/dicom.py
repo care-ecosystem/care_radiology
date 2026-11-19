@@ -53,9 +53,7 @@ class DicomStudyReadSpec(DicomStudyBaseSpec):
     def perform_extra_serialization(cls, mapping, obj, *args, pacs_details=None, **kwargs):
         super().perform_extra_serialization(mapping, obj)
         if not pacs_details:
-            # A study archived out of the PACS has no Study UID and so no details to fetch; the
-            # ones kept on the record when it was archived are returned instead. Its Study UID is
-            # deliberately not read back - an empty study_uid is what marks it as gone from the PACS.
+            # A study archived out of the PACS has no Study UID and so no details to fetch; 
             meta = obj.meta or {}
             for field in ARCHIVED_STUDY_DETAIL_FIELDS:
                 if mapping.get(field) is None:
