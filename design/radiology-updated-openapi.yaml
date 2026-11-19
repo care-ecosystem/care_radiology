@@ -986,10 +986,10 @@ paths:
         Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
         on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed. Each
         has the encounter and service request from core base specs only; use the retrieve for
-        the full service request. Filter on archive state with `is_archived`: `true` lists only
+        the full service request. Filter on archive state with `archive_state`: `archived` lists only
         imaging studies that have archived DICOM studies, with only those in `studies[]`;
-        `false` leaves archived studies out; omitted returns both (like the Files tab). Each
-        study carries the archive fields. `include_archived` is only supported on the retrieve.
+        `active` leaves archived studies out; `all` (the default) returns both (like the Files tab). Each
+        study carries the archive fields.
         To fetch a single one by service request, use
         `GET /patient/{patient_id}/imaging_study/{service_request_id}/`.
 
@@ -1004,7 +1004,7 @@ paths:
           schema:
             type: string
             format: uuid
-        - $ref: '#/components/parameters/IsArchived'
+        - $ref: '#/components/parameters/ArchiveState'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -1015,7 +1015,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudyList'
         '400':
-          description: '`encounter` is missing, or `is_archived` is not `true`/`false`'
+          description: '`encounter` is missing, or `archive_state` is not `active`/`archived`/`all`'
           content:
             application/json:
               schema:
@@ -1026,12 +1026,12 @@ paths:
                     errors:
                       - type: "validation_error"
                         msg: "encounter is required"
-                invalid_is_archived:
+                invalid_archive_state:
                   value:
                     errors:
                       - type: "validation_error"
-                        loc: ["is_archived"]
-                        msg: "Must be true or false"
+                        loc: ["archive_state"]
+                        msg: "Must be one of active, archived, all"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1065,7 +1065,7 @@ paths:
         `can_read_radiology_data` permission on its facility.
       operationId: getImagingStudy
       parameters:
-        - $ref: '#/components/parameters/IncludeArchived'
+        - $ref: '#/components/parameters/ArchiveState'
       responses:
         '200':
           description: Imaging study metadata
@@ -1074,7 +1074,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ImagingStudy'
         '400':
-          description: '`include_archived` is not `true`/`false`'
+          description: '`archive_state` is not `active`/`archived`/`all`'
           content:
             application/json:
               schema:
@@ -1082,8 +1082,8 @@ paths:
               example:
                 errors:
                   - type: "validation_error"
-                    msg:
-                      include_archived: "Must be true or false"
+                    loc: ["archive_state"]
+                    msg: "Must be one of active, archived, all"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1309,8 +1309,8 @@ paths:
       description: |
         Soft-hides a `DicomStudy` by setting `is_archived=true` along with `archive_reason`,
         `archived_datetime`, and `archived_by`. The row is never deleted. Once archived, the entry
-        is left out of the imaging study's `studies[]` unless `include_archived=true` is passed
-        to the retrieve.
+        is left out of the imaging study's `studies[]` unless `archive_state=archived` or
+        `all` is passed to the retrieve.
         Mirrors the archive pattern used by `FileUpload` and `ReportUpload` elsewhere in CARE.
 
         `study_id` is the `id` of an entry in an imaging study's `studies[]`. The study must
@@ -1595,24 +1595,16 @@ components:
       schema:
         type: string
         format: uuid
-    IncludeArchived:
-      name: include_archived
+    ArchiveState:
+      name: archive_state
       in: query
       description: |
-        Include archived DICOM studies in `studies[]` (retrieve only). Defaults to `false`, so the
-        retrieve leaves the archived ones out; `true` includes them.
+        Filter `studies[]` by archive state (list and retrieve). `archived` returns only the
+        archived ones (on the list, only imaging studies that have any); `active` returns active
+        ones only; `all` returns both. Defaults to `all` on the list and `active` on the retrieve.
       schema:
-        type: boolean
-        default: false
-    IsArchived:
-      name: is_archived
-      in: query
-      description: |
-        Filter the list by archive state (list only). `true` returns only imaging studies that
-        have archived DICOM studies, with only the archived ones in `studies[]`; `false` returns
-        active studies only; omitted returns both.
-      schema:
-        type: boolean
+        type: string
+        enum: [active, archived, all]
     Limit:
       name: limit
       in: query
@@ -1927,7 +1919,7 @@ components:
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
             DCM4CHEE (cached for an hour). Archived studies are included unless
-            `is_archived=false`, and are the only ones when `is_archived=true`. A study DCM4CHEE cannot return, or whose details fail to
+            `archive_state=active`, and are the only ones when `archive_state=archived`. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'
@@ -2026,8 +2018,8 @@ components:
           description: |
             DICOM studies linked to this imaging study, newest first, with live metadata from
             DCM4CHEE (cached for an hour). Archived studies are left out unless
-            `include_archived=true` is passed to the retrieve; the PATCH response also leaves them
-            out. A study DCM4CHEE cannot return, or whose details fail to
+            `archive_state=archived` or `all` is passed to the retrieve; the PATCH response also
+            leaves them out. A study DCM4CHEE cannot return, or whose details fail to
             load, is left out (and logged) instead of failing the response.
           items:
             $ref: '#/components/schemas/ImagingStudyDicomStudy'

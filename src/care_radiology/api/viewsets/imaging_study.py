@@ -82,25 +82,18 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             [ImagingStudyArchivedReadSpec.serialize(obj, pacs_details=pacs_details).to_json() for obj in page]
         )
 
-    def _bool_param(self, name, default=False):
-        value = self.request.query_params.get(name)
-        if value is None:
-            return default
-        value = value.lower()
-        if value not in ("true", "false"):
-            raise ValidationError({name: "Must be true or false"})
-        return value == "true"
-
     def get_queryset(self):
         patient = self.get_patient()
 
-        include_archived = self.action == "retrieve" and self._bool_param("include_archived")
-        # On list, is_archived=true returns only archived studies, is_archived=false only active ones,
-        # and leaving it out returns both (like the Files tab).
-        is_archived = self._bool_param("is_archived", default=None) if self.action == "list" else False
-        archived_only = is_archived is True
+        archive_state = "active"
+        if self.action in ("list", "retrieve"):
+            default = "all" if self.action == "list" else "active"
+            archive_state = self.request.query_params.get("archive_state", default).lower()
+            if archive_state not in ("active", "archived", "all"):
+                raise ValidationError({"archive_state": "Must be one of active, archived, all"})
+        archived_only = archive_state == "archived"
         studies = DicomStudy.objects.select_related("created_by", "updated_by").order_by("-created_date")
-        if include_archived or self.action == "list" and is_archived is None:
+        if archive_state == "all":
             studies = studies.select_related("archived_by")
         elif archived_only:
             studies = studies.select_related("archived_by").filter(is_archived=True)

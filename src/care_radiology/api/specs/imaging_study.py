@@ -46,7 +46,6 @@ class ImagingStudyReadSpec(EMRResource):
 
 
 class ImagingStudyArchivedReadSpec(ImagingStudyReadSpec):
-    # Archived studies carry who archived them, when and why.
     __study_spec__ = DicomStudyRetrieveSpec
 
 
