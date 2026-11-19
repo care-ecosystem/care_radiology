@@ -14,6 +14,7 @@ from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
+    ARCHIVED_STUDY_UID_FIELD,
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
@@ -64,6 +65,30 @@ class PacsDeleteError(Exception):
         self.extra = extra or {}
 
 
+def _snapshot_study_details(study):
+    """
+    Keeps the PACS details of a study that is about to be deleted from the PACS on the record
+    itself, so that it can still be listed with its date, description and counts once its files
+    are gone. Must be read before the delete; afterwards the PACS has nothing left to answer
+    with. A study the PACS cannot answer for leaves the record with whatever it already holds.
+    """
+    try:
+        details = fetch_study(study)
+    except Exception:
+        logger.exception("Could not read DICOM study %s from PACS before archiving", study.dicom_study_uid)
+        return
+    if not details:
+        return
+    series = details.get("study_series") or []
+    study.meta = {
+        **(study.meta or {}),
+        "study_date": details.get("study_date"),
+        "study_description": details.get("study_description"),
+        "number_of_series": len(series),
+        "number_of_instances": count_study_instances(series),
+    }
+
+
 def _clear_study_uid(study):
     """
     Drops the Study Instance UID of a study whose files were deleted from the PACS, so that nothing
@@ -73,7 +98,7 @@ def _clear_study_uid(study):
     """
     if not study.dicom_study_uid:
         return
-    study.meta = {**(study.meta or {}), "archived_study_uid": study.dicom_study_uid}
+    study.meta = {**(study.meta or {}), ARCHIVED_STUDY_UID_FIELD: study.dicom_study_uid}
     study.dicom_study_uid = ""
 
 
@@ -224,6 +249,16 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
             cache.delete(lock_key)
 
 
+def count_study_instances(series):
+    """
+    Totals the instances across a study's series, or None when a count cannot be read.
+    """
+    try:
+        return sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
+    except (TypeError, ValueError):
+        return None
+
+
 def save_study_counts(dicom_study, study_details):
     """
     Saves the study's series and instance counts from its PACS details, only ever raising them,
@@ -231,9 +266,8 @@ def save_study_counts(dicom_study, study_details):
     is logged and skipped rather than failing the upload.
     """
     series = study_details["study_series"]
-    try:
-        number_of_instances = sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
-    except (TypeError, ValueError):
+    number_of_instances = count_study_instances(series)
+    if number_of_instances is None:
         logger.warning("Study %s has an unreadable series instance count, counts not updated", dicom_study.pk)
         return
 
@@ -551,10 +585,10 @@ def archive_study(study, archive_reason, archived_by=None):
 
     With CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE enabled, the study's files are
     deleted from the PACS first; if that fails, PacsDeleteError is raised and the study
-    is left unarchived so the archive can be retried. A study deleted from the PACS has its
-    Study Instance UID cleared, as does any earlier archived record of the same UID, since
-    their files are gone too. The CARE records are kept and stay listed as archived, with
-    their archive reason and the counts held on the record itself.
+    is left unarchived so the archive can be retried. A study deleted from the PACS keeps its
+    PACS details in `meta` and has its Study Instance UID cleared, as does any earlier archived
+    record of the same UID, since their files are gone too. The CARE records are kept and stay
+    listed as archived, with their archive reason and the details kept on the record itself.
     """
     with transaction.atomic():
         deleted_from_pacs = False
@@ -574,12 +608,17 @@ def archive_study(study, archive_reason, archived_by=None):
                     study.dicom_study_uid,
                 )
             else:
+                siblings = list(
+                    DicomStudy.objects.filter(
+                        dicom_study_uid=study.dicom_study_uid, is_archived=True
+                    ).exclude(pk=study.pk)
+                )
+                for record in (study, *siblings):
+                    _snapshot_study_details(record)
+
                 delete_study_from_pacs(study.dicom_study_uid)
                 deleted_from_pacs = True
 
-                siblings = DicomStudy.objects.filter(
-                    dicom_study_uid=study.dicom_study_uid, is_archived=True
-                ).exclude(pk=study.pk)
                 for sibling in siblings:
                     _clear_study_uid(sibling)
                     sibling.save(update_fields=["dicom_study_uid", "meta", "modified_date"])
