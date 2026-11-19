@@ -141,15 +141,17 @@ When a check is disabled, a warning is logged for each request that skips it. Di
 
 ### Deleting Archived Studies from the PACS
 
-By default, archiving a study (the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint or the auto-archive task) also deletes the study's files from dcm4chee, which removes the study from the PACS database too. The study's CARE record is then soft-deleted as well, so it is no longer listed, even as archived. **This cannot be undone.** Set `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` to `False` to only hide the study in CARE instead; its files stay in the PACS, and it is still listed when archived studies are requested.
+By default, archiving a study (the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint or the auto-archive task) also deletes the study's files from dcm4chee, which removes the study from the PACS database too. **This cannot be undone.** Set `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` to `False` to only hide the study in CARE instead; its files stay in the PACS.
+
+The study's CARE record is kept either way, and is still listed when archived studies are requested, with its archive reason and who archived it. A record whose files were deleted from the PACS has its Study Instance UID cleared - an empty `study_uid` is what marks a study as no longer in the PACS, and the PACS is never queried for it again. The record then carries only what it holds itself: its series and instance counts, and who archived it, when and why. Its `study_date`, `study_description`, `study_modalities` and `study_series` are empty, since only the PACS held them. The cleared UID is kept in the record's `meta` as `archived_study_uid`, so the record still says which study was deleted.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` | `True` | When archiving a study, deletes its files from the PACS and soft-deletes its CARE record. |
+| `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` | `True` | When archiving a study, deletes its files from the PACS and clears the Study Instance UID on its CARE record. |
 
 dcm4chee only deletes a study permanently once it is rejected, so the study is first rejected with the rejection note code `113001^DCM`, then deleted. The code is set in `constants.py` (`PACS_DELETE_REJECTION_CODE`) and must be configured as a rejection note in dcm4chee.
 
-The files are deleted before the study is marked archived. If the PACS delete fails, the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint returns `502` (or `504` on timeout) and the study stays unarchived. The auto-archive task skips the study and retries it on its next run. A study the PACS no longer has is treated as already deleted. The files are kept in the PACS if another unarchived CARE study record has the same Study Instance UID. The archived record is then kept in CARE too.
+The files are deleted before the study is marked archived. If the PACS delete fails, the `patient/{patient_id}/imaging_study/{study_id}/archive/` endpoint returns `502` (or `504` on timeout) and the study stays unarchived. The auto-archive task skips the study and retries it on its next run. A study the PACS no longer has is treated as already deleted. The files are kept in the PACS if another unarchived CARE study record has the same Study Instance UID; the record is then archived with its UID intact, and keeps its PACS details. When the files are deleted, any earlier archived record of the same Study Instance UID has its UID cleared as well, since its files are gone too.
 
 Uploading a study again after it was archived creates a new, active CARE study record under the same imaging study. The archived record is left as it is. If the archive did not delete the files from the PACS, re-uploading the same files is rejected as a duplicate (see `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`).
 

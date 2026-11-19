@@ -64,6 +64,19 @@ class PacsDeleteError(Exception):
         self.extra = extra or {}
 
 
+def _clear_study_uid(study):
+    """
+    Drops the Study Instance UID of a study whose files were deleted from the PACS, so that nothing
+    queries the PACS for it again. A record with no Study UID has nothing left in the PACS; it is
+    still listed as archived, with its archive reason and the counts held on the record itself. The
+    UID is kept in `meta` as `archived_study_uid`, so the record still says which study was deleted.
+    """
+    if not study.dicom_study_uid:
+        return
+    study.meta = {**(study.meta or {}), "archived_study_uid": study.dicom_study_uid}
+    study.dicom_study_uid = ""
+
+
 def _lock_study_uid(study_uid):
     """
     Serialises the archive's PACS delete with every path that creates a DicomStudy for the
@@ -403,6 +416,8 @@ def fetch_study(dicom_study):
         return values[0] if values else None
 
     study_uid = dicom_study.dicom_study_uid
+    if not study_uid:
+        return None
     key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
     # The cache is per Study UID, which an archived record and its re-upload share, so the
     # record's own external_id is added on every return rather than cached.
@@ -456,7 +471,8 @@ def fetch_study(dicom_study):
 def fetch_studies(dicom_studies):
     """
     Fetches the PACS details of each study in parallel and returns them keyed by study id. A study
-    whose details cannot be fetched is logged and left out.
+    whose details cannot be fetched is logged and left out, as is one that has no Study UID left,
+    whose files were deleted from the PACS when it was archived.
     """
 
     def fetch_or_none(dicom_study):
@@ -466,6 +482,7 @@ def fetch_studies(dicom_studies):
             logger.exception("Could not fetch study %s from PACS", dicom_study.dicom_study_uid)
             return None
 
+    dicom_studies = [study for study in dicom_studies if study.dicom_study_uid]
     if not dicom_studies:
         return {}
     with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
@@ -534,9 +551,10 @@ def archive_study(study, archive_reason, archived_by=None):
 
     With CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE enabled, the study's files are
     deleted from the PACS first; if that fails, PacsDeleteError is raised and the study
-    is left unarchived so the archive can be retried. A study deleted from the PACS is
-    also soft-deleted in CARE, along with any earlier archived records of the same Study
-    Instance UID.
+    is left unarchived so the archive can be retried. A study deleted from the PACS has its
+    Study Instance UID cleared, as does any earlier archived record of the same UID, since
+    their files are gone too. The CARE records are kept and stay listed as archived, with
+    their archive reason and the counts held on the record itself.
     """
     with transaction.atomic():
         deleted_from_pacs = False
@@ -559,21 +577,26 @@ def archive_study(study, archive_reason, archived_by=None):
                 delete_study_from_pacs(study.dicom_study_uid)
                 deleted_from_pacs = True
 
-                DicomStudy.objects.filter(
-                    dicom_study_uid=study.dicom_study_uid, is_archived=True, deleted=False
-                ).exclude(pk=study.pk).update(deleted=True, modified_date=timezone.now())
+                siblings = DicomStudy.objects.filter(
+                    dicom_study_uid=study.dicom_study_uid, is_archived=True
+                ).exclude(pk=study.pk)
+                for sibling in siblings:
+                    _clear_study_uid(sibling)
+                    sibling.save(update_fields=["dicom_study_uid", "meta", "modified_date"])
 
         study.is_archived = True
         study.archive_reason = archive_reason
         study.archived_datetime = timezone.now()
         study.archived_by = archived_by
-        study.deleted = study.deleted or deleted_from_pacs
+        if deleted_from_pacs:
+            _clear_study_uid(study)
         update_fields = [
             "is_archived",
             "archive_reason",
             "archived_datetime",
             "archived_by",
-            "deleted",
+            "dicom_study_uid",
+            "meta",
             "modified_date",
         ]
         if archived_by:

@@ -49,8 +49,12 @@ class DicomStudyReadSpec(DicomStudyBaseSpec):
     number_of_instances: int | None = None
 
     @classmethod
-    def perform_extra_serialization(cls, mapping, obj, *args, pacs_details, **kwargs):
+    def perform_extra_serialization(cls, mapping, obj, *args, pacs_details=None, **kwargs):
         super().perform_extra_serialization(mapping, obj)
+        # A study archived out of the PACS has no Study UID and so no PACS details; it is listed
+        # with what the record itself holds - its counts, and who archived it, when and why.
+        if not pacs_details:
+            return
         for field in ("study_date", "study_description", "study_modalities", "study_series"):
             mapping[field] = pacs_details[field]
 
