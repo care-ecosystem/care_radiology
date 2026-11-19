@@ -87,13 +87,12 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
 
         archive_state = "active"
         if self.action in ("list", "retrieve"):
-            default = "all" if self.action == "list" else "active"
-            archive_state = self.request.query_params.get("archive_state", default).lower()
-            if archive_state not in ("active", "archived", "all"):
-                raise ValidationError({"archive_state": "Must be one of active, archived, all"})
+            archive_state = self.request.query_params.get("archive_state", "").lower() or None
+            if archive_state not in (None, "active", "archived"):
+                raise ValidationError({"archive_state": "Must be one of active, archived"})
         archived_only = archive_state == "archived"
         studies = DicomStudy.objects.select_related("created_by", "updated_by").order_by("-created_date")
-        if archive_state == "all":
+        if archive_state is None:
             studies = studies.select_related("archived_by")
         elif archived_only:
             studies = studies.select_related("archived_by").filter(is_archived=True)
