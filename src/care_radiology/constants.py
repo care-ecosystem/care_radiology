@@ -34,5 +34,10 @@ DICOM_UPLOAD_LOCK_KEY_TEMPLATE = "radiology:dicom:upload-lock:{}"
 # keyed by Study Instance UID.
 DICOM_STUDY_LOCK_KEY_TEMPLATE = "radiology:dicom:study-lock:{}"
 
+# When a study's last file was uploaded, and whether its PACS patient sync task is queued, so each study has
+# one task that moves it once its files stop arriving.
+DICOM_STUDY_LAST_UPLOAD_KEY_TEMPLATE = "radiology:dicom:last-upload:{}"
+DICOM_STUDY_PATIENT_SYNC_SCHEDULED_KEY_TEMPLATE = "radiology:dicom:patient-sync-scheduled:{}"
+
 # dcm4chee rejection note (code^scheme) applied before a study is deleted from the PACS
 PACS_DELETE_REJECTION_CODE = "113001^DCM"

@@ -29,6 +29,8 @@ class DICOM_TAG(Enum):
     StudyTime = "00080030"
     TimezoneOffsetFromUTC = "00080201"
     AccessionNumber = "00080050"
+    PatientID = "00100020"
+    IssuerOfPatientID = "00100021"
 
     SeriesInstanceUID = "0020000E"
     SeriesModality = "00080060"
@@ -96,6 +98,7 @@ def d_query_study(study_uid):
                     DICOM_TAG.StudyDate.value,
                     DICOM_TAG.StudyTime.value,
                     DICOM_TAG.TimezoneOffsetFromUTC.value,
+                    DICOM_TAG.IssuerOfPatientID.value,
                 ]
             ),
         },
@@ -369,8 +372,6 @@ def read_accession_number(file_obj):
 
         transfer_syntax = None
         while True:
-            # Only the group is peeked at before reading on: past the meta group the
-            # dataset may use another encoding, so its element must not be parsed here.
             dataset_start = file_obj.tell()
             group = file_obj.read(2)
             if len(group) < 2:
