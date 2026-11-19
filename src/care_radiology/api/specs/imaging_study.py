@@ -45,6 +45,10 @@ class ImagingStudyReadSpec(EMRResource):
         ]
 
 
+class ImagingStudyArchivedReadSpec(ImagingStudyReadSpec):
+    __study_spec__ = DicomStudyRetrieveSpec
+
+
 class ImagingStudyRetrieveSpec(ImagingStudyReadSpec):
     __study_spec__ = DicomStudyRetrieveSpec
 
