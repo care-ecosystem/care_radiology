@@ -27,17 +27,24 @@ ASSIGNMENT_STATUS_UNASSIGNED = "unassigned"
 
 DICOM_STUDY_CACHE_KEY_TEMPLATE = "radiology:dicom:study:{}"
 
-# Serialises concurrent uploads of the same DICOM file, keyed by SOP Instance UID.
-DICOM_UPLOAD_LOCK_KEY_TEMPLATE = "radiology:dicom:upload-lock:{}"
+# The active CARE records of a Study UID, so the files of a study being uploaded skip the table lookup.
+DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE = "radiology:dicom:study-links:{}"
+
+# The generation of a study's SOP Instance keys, added once they hold every instance the PACS has. Deleting it
+# drops them all at once: later uploads fill a new generation, and the old keys expire.
+DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE = "radiology:dicom:study-sops:{}"
+
+# One key per SOP Instance UID a study has in the PACS or that an upload has claimed, keyed by Study UID,
+# generation and SOP Instance UID.
+DICOM_SOP_INSTANCE_KEY_TEMPLATE = "radiology:dicom:study-sops:{}:{}:{}"
+
+# Expiry of the study links, refreshed on every upload of the study, and of a study's SOP Instance generation,
+# which is not, so an active study's instances are read from the PACS again once it expires.
+DICOM_STUDY_UPLOAD_CACHE_TIMEOUT = 60 * 10
 
 # Postgres advisory lock serialising the archive's PACS delete with record creation,
 # keyed by Study Instance UID.
 DICOM_STUDY_LOCK_KEY_TEMPLATE = "radiology:dicom:study-lock:{}"
-
-# When a study's last file was uploaded, and whether its PACS patient sync task is queued, so each study has
-# one task that moves it once its files stop arriving.
-DICOM_STUDY_LAST_UPLOAD_KEY_TEMPLATE = "radiology:dicom:last-upload:{}"
-DICOM_STUDY_PATIENT_SYNC_SCHEDULED_KEY_TEMPLATE = "radiology:dicom:patient-sync-scheduled:{}"
 
 # dcm4chee rejection note (code^scheme) applied before a study is deleted from the PACS
 PACS_DELETE_REJECTION_CODE = "113001^DCM"

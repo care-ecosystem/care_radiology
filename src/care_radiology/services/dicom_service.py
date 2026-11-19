@@ -1,4 +1,5 @@
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
@@ -17,8 +18,11 @@ from care_radiology.constants import (
     ARCHIVED_STUDY_UID_FIELD,
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
+    DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
-    DICOM_UPLOAD_LOCK_KEY_TEMPLATE,
+    DICOM_SOP_INSTANCE_KEY_TEMPLATE,
+    DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE,
+    DICOM_STUDY_UPLOAD_CACHE_TIMEOUT,
     MPPS_TAG_DISPLAY_BY_STATUS,
     PACS_DELETE_REJECTION_CODE,
 )
@@ -31,12 +35,13 @@ from care_radiology.utils.dicom import (
     DicomParseError,
     d_datetime_to_iso,
     d_find,
-    d_query_instance,
     d_query_series_for_study,
     d_query_study,
+    d_query_study_sop_instance_uids,
     encode_file_multipart_related,
     read_accession_number,
     read_sop_instance_uid,
+    read_study_instance_uid,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,60 +120,163 @@ def _lock_study_uid(study_uid):
         )
 
 
-def _upload_lock_timeout():
-    """
-    Upper bound on how long the locked section can take, so a worker killed mid-upload
-    cannot strand the lock: the PACS calls it covers are the duplicate query, the STOW-RS
-    upload and the metadata queries that follow, each bounded by its own request timeout.
-    """
-    return (
-        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT
-        + plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT
-        + plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT
+def _load_study_links(study_uid):
+    """The imaging study, patient, encounter and service request of each active CARE record of the Study UID."""
+    studies = (
+        DicomStudy.objects.filter(dicom_study_uid=study_uid, is_archived=False)
+        .select_related("imaging_study__patient", "imaging_study__encounter", "imaging_study__service_request")
+        .order_by("created_date")
     )
+    return [
+        {
+            "imaging_study_id": study.imaging_study_id,
+            "patient_id": study.imaging_study.patient_id,
+            "patient_external_id": str(study.imaging_study.patient.external_id),
+            "encounter_id": study.imaging_study.encounter_id,
+            "encounter_external_id": str(study.imaging_study.encounter.external_id),
+            "service_request_id": (
+                str(study.imaging_study.service_request.external_id)
+                if study.imaging_study.service_request_id is not None
+                else None
+            ),
+        }
+        for study in studies
+    ]
+
+
+def _cache_study_links(study_uid):
+    """Caches the Study UID's links when it has active records; a new study is not cached."""
+    key = DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE.format(study_uid)
+    links = _load_study_links(study_uid)
+    if links:
+        cache.set(key, links, timeout=DICOM_STUDY_UPLOAD_CACHE_TIMEOUT)
+    else:
+        cache.delete(key)
+    return links
+
+
+def _cached_study_links(study_uid):
+    key = DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE.format(study_uid)
+    links = cache.get(key)
+    if links is None:
+        return _cache_study_links(study_uid)
+    cache.touch(key, DICOM_STUDY_UPLOAD_CACHE_TIMEOUT)
+    return links
+
+
+def invalidate_study_upload_cache(study_uid):
+    """Drops the Study UID's cached links and SOP Instance keys, after its records or its files in the PACS change."""
+    cache.delete(DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE.format(study_uid))
+    cache.delete(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid))
+
+
+def read_file_study_uid(dcm_file):
+    try:
+        study_uid = read_study_instance_uid(dcm_file)
+    except DicomParseError as e:
+        raise _validation_error(
+            "study_uid_unreadable", "Could not read the Study Instance UID from the DICOM file", details=e.message
+        ) from e
+    if not study_uid:
+        raise _validation_error("study_uid_missing", "DICOM file does not contain a Study Instance UID")
+    return study_uid
+
+
+def _validate_study_links(imaging_study, study_uid):
+    """
+    Rejects, before the upload, a Study UID the cached links show under another patient, encounter or service
+    request. The check under the Study UID lock after the upload stays the authoritative one.
+    """
+    try:
+        _check_study_not_linked_elsewhere(imaging_study, study_uid, _cached_study_links(study_uid))
+    except StudyLinkConflictError as e:
+        raise _validation_error("study_link_conflict", e.message, study_uid=study_uid) from e
+
+
+# SOP Instance keys outlive their generation key, which is added after them, so a generation never
+# points at keys that have already expired.
+_SOP_INSTANCE_KEY_TIMEOUT = DICOM_STUDY_UPLOAD_CACHE_TIMEOUT + 60
+
+
+def _seed_sop_set(study_uid):
+    """
+    Adds a key for each instance the PACS has of the study under a new generation, and returns the generation the
+    study's keys are under. Files reach the PACS only through CARE uploads, so a Study UID without a CARE record
+    has nothing there and the PACS is not queried; archived records count, since an archive can leave the files
+    in the PACS.
+    """
+    sop_instance_uids = []
+    if DicomStudy.objects.filter(dicom_study_uid=study_uid).exists():
+        sop_instance_uids = d_query_study_sop_instance_uids(study_uid)
+        if sop_instance_uids is None:
+            raise DicomUploadError(
+                "Failed to query the study's instances from DCM4CHE", status_code=502, extra={"study_uid": study_uid}
+            )
+    generation = uuid.uuid4().hex
+    cache.set_many(
+        {DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, uid): True for uid in sop_instance_uids},
+        timeout=_SOP_INSTANCE_KEY_TIMEOUT,
+    )
+    generation_key = DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)
+    if cache.add(generation_key, generation, timeout=DICOM_STUDY_UPLOAD_CACHE_TIMEOUT):
+        return generation
+    # Another upload filled the study meanwhile, adding its generation only after all of its keys.
+    current = cache.get(generation_key)
+    if current is None:
+        # Dropped again straight away, by an archive of the study.
+        raise DicomUploadError("The study changed during the upload, try again", status_code=409)
+    return current
+
+
+def _claim_sop_instance(study_uid, sop_instance_uid):
+    """
+    Adds the key of the SOP Instance UID, filling the study's keys from the PACS first if needed, and returns it.
+    Returns None when the key is already there: the file is in the PACS or another request is uploading it.
+    """
+    generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
+    key = DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid)
+    if not cache.add(key, True, timeout=_SOP_INSTANCE_KEY_TIMEOUT):
+        return None
+    return key
 
 
 def upload_dicom_file(imaging_study, dcm_file, user=None):
-    """Upload a DICOM file after rejecting an existing SOP Instance UID."""
+    """
+    Uploads a DICOM file to the PACS. Its Study UID is checked against the cached links of the study, and its
+    SOP Instance UID is claimed among the study's cached SOP Instance keys, which rejects a file already in the
+    PACS or being uploaded by another request. The PACS stores the file under the CARE patient's Patient ID.
+    """
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
 
-    lock_key = None
+    study_uid = read_file_study_uid(dcm_file)
+    _validate_study_links(imaging_study, study_uid)
+
+    claim_key = None
+    stored = False
     try:
         duplicate_check_enabled = plugin_settings.CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE
         if not duplicate_check_enabled:
             logger.warning("DICOM duplicate check is disabled on this instance, uploading without it")
 
-        sop_instance_uid = read_sop_instance_uid(dcm_file) if duplicate_check_enabled else None
-
-        if sop_instance_uid:
-            candidate_key = DICOM_UPLOAD_LOCK_KEY_TEMPLATE.format(sop_instance_uid)
-
-            if cache.add(candidate_key, True, timeout=_upload_lock_timeout()) is False:
-                raise DicomUploadError(
-                    "Duplicate: File already uploaded.",
-                    status_code=409,
-                    extra={
-                        "duplicate": True,
-                        "sop_instance_uid": sop_instance_uid,
-                        "concurrent": True,
-                    },
-                )
-
-            lock_key = candidate_key
-
-            if d_query_instance(sop_instance_uid) is not None:
-                raise DicomUploadError(
-                    "Duplicate: File already uploaded.",
-                    status_code=409,
-                    extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
-                )
+        if duplicate_check_enabled:
+            sop_instance_uid = read_sop_instance_uid(dcm_file)
+            if sop_instance_uid:
+                claim_key = _claim_sop_instance(study_uid, sop_instance_uid)
+                if claim_key is None:
+                    raise DicomUploadError(
+                        "Duplicate: File already uploaded.",
+                        status_code=409,
+                        extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
+                    )
 
         body, content_type = encode_file_multipart_related(dcm_file)
 
         try:
             upload_response = requests.post(
                 url=f"{DCM4CHEE_BASEURL}/rs/studies",
+                # dcm4chee sets each query parameter as an attribute of the stored file, overwriting its value.
+                params={"PatientID": get_dicom_patient_id(imaging_study.patient)},
                 data=body,
                 headers={
                     "Content-Type": content_type,
@@ -192,23 +300,11 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                 status_code=502,
                 extra={"status_code": upload_response.status_code},
             )
+        stored = True
 
-        referenced_sop = d_find(upload_response.json(), DICOM_TAG.ReferencedSOPSQ.value)[0]
-
-        instance_uid = d_find(referenced_sop, DICOM_TAG.ReferencedInstanceUID.value)[0]
-
-        instance_data = d_query_instance(instance_uid)
-        if instance_data is None:
-            raise DicomUploadError(
-                "Upload succeeded but failed to query study metadata from DCM4CHE",
-                status_code=500,
-                extra={"instance_uid": instance_uid},
-            )
-
-        study_uid = d_find(instance_data, DICOM_TAG.StudyInstanceUID.value)[0]
         with transaction.atomic():
             _lock_study_uid(study_uid)
-            linked_elsewhere = _check_study_not_linked_elsewhere(imaging_study, study_uid)
+            linked_elsewhere = _check_study_not_linked_elsewhere(imaging_study, study_uid, _load_study_links(study_uid))
             (dicom_study, created) = DicomStudy.objects.update_or_create(
                 dicom_study_uid=study_uid,
                 imaging_study=imaging_study,
@@ -222,6 +318,8 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                     study_uid,
                     imaging_study.external_id,
                 )
+        if created:
+            transaction.on_commit(lambda: _cache_study_links(study_uid))
 
         cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
         study_details = fetch_study(dicom_study)
@@ -244,9 +342,8 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
         logger.exception("Unexpected error during DICOM upload")
         raise DicomUploadError("Exception occurred", status_code=500, extra={"details": str(e)})
     finally:
-        # Released on failure too, so a retry is not blocked until the lock expires.
-        if lock_key:
-            cache.delete(lock_key)
+        if claim_key and not stored:
+            cache.delete(claim_key)
 
 
 def count_study_instances(series):
@@ -277,30 +374,37 @@ def save_study_counts(dicom_study, study_details):
     )
 
 
-def _check_study_not_linked_elsewhere(imaging_study, study_uid):
+def _check_study_not_linked_elsewhere(imaging_study, study_uid, links):
     """
-    Rejects a Study UID that a non-archived record already has under another imaging study. Runs
-    under the Study UID lock, so concurrent uploads cannot both pass it. Returns whether another
-    imaging study holds it, which is only allowed with the check disabled, and never across patients.
+    Rejects a Study UID that a non-archived record (one of `links`, from _load_study_links) already has under
+    another imaging study. Run under the Study UID lock, concurrent uploads cannot both pass it. Returns whether
+    another imaging study holds it, which is only allowed with the check disabled, and never across patients.
     """
-    others = DicomStudy.objects.filter(dicom_study_uid=study_uid, is_archived=False).exclude(
-        imaging_study=imaging_study
-    )
+    others = [link for link in links if link["imaging_study_id"] != imaging_study.id]
     # Checked over every record rather than one, since with the check disabled the UID can
     # already sit under several imaging studies.
-    if others.exclude(imaging_study__patient_id=imaging_study.patient_id).exists():
-        raise StudyLinkConflictError("Study is already linked to another patient", study_uid=study_uid)
+    other_patient = next((link for link in others if link["patient_id"] != imaging_study.patient_id), None)
+    if other_patient is not None:
+        raise StudyLinkConflictError(
+            f"Study is already linked to another patient: {other_patient['patient_external_id']}", study_uid=study_uid
+        )
 
-    linked_elsewhere = others.select_related("imaging_study__service_request").first()
-    if linked_elsewhere is None:
+    if not others:
         return False
     if not plugin_settings.CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR:
         return True
-    other = linked_elsewhere.imaging_study.service_request
-    if other is None:
-        raise StudyLinkConflictError("Study is already linked to a different imaging study", study_uid=study_uid)
+    other = others[0]
+    other_service_request_id = other["service_request_id"]
+    if other_service_request_id is None:
+        if other["encounter_id"] == imaging_study.encounter_id:
+            raise StudyLinkConflictError(
+                "Study is already linked to this encounter without a service request", study_uid=study_uid
+            )
+        raise StudyLinkConflictError(
+            f"Study is already linked to a different encounter: {other['encounter_external_id']}", study_uid=study_uid
+        )
     raise StudyLinkConflictError(
-        f"Study is already linked to a different service request: {other.external_id}", study_uid=study_uid
+        f"Study is already linked to a different service request: {other_service_request_id}", study_uid=study_uid
     )
 
 
@@ -316,7 +420,7 @@ def imaging_study_for_service_request(service_request):
     return imaging_study
 
 
-def _accession_error(error_type, msg, **extra):
+def _validation_error(error_type, msg, **extra):
     # emr_exception_handler returns an {"errors": [...]} detail as is, with status 400.
     return ValidationError({"errors": [{"type": error_type, "msg": msg, **extra}]})
 
@@ -325,13 +429,13 @@ def read_file_accession_number(dcm_file):
     try:
         accession_number = read_accession_number(dcm_file)
     except DicomParseError as e:
-        raise _accession_error(
+        raise _validation_error(
             "accession_number_unreadable",
             "Could not read the accession number from the DICOM file",
             details=e.message,
         ) from e
     if not accession_number:
-        raise _accession_error("accession_number_missing", "DICOM file does not contain an accession number")
+        raise _validation_error("accession_number_missing", "DICOM file does not contain an accession number")
     return accession_number
 
 
@@ -340,11 +444,11 @@ def validate_accession_number(dcm_file, service_request):
     try:
         imaging_study = service_request.imaging_study
     except ImagingStudy.DoesNotExist:
-        raise _accession_error(
+        raise _validation_error(
             "imaging_study_missing", "Service request has no imaging study to match the accession number against"
         ) from None
     if file_accession_number != imaging_study.accession_number:
-        raise _accession_error(
+        raise _validation_error(
             "accession_number_mismatch", "Accession number in the DICOM file does not match the service request"
         )
 
@@ -363,7 +467,7 @@ def imaging_study_for_accession_number(accession_number, facility):
         .first()
     )
     if imaging_study is None:
-        raise _accession_error(
+        raise _validation_error(
             "accession_number_unmatched",
             "No imaging study in the facility has the file's accession number",
         )
@@ -590,6 +694,8 @@ def archive_study(study, archive_reason, archived_by=None):
     record of the same UID, since their files are gone too. The CARE records are kept and stay
     listed as archived, with their archive reason and the details kept on the record itself.
     """
+    # Taken before the archive clears it from a study deleted from the PACS.
+    study_uid = study.dicom_study_uid
     with transaction.atomic():
         deleted_from_pacs = False
         if plugin_settings.CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE:
@@ -642,129 +748,7 @@ def archive_study(study, archive_reason, archived_by=None):
             study.updated_by = archived_by
             update_fields.append("updated_by")
         study.save(update_fields=update_fields)
+        transaction.on_commit(lambda: invalidate_study_upload_cache(study_uid))
 
     return study
 
-
-class PacsPatientSyncError(Exception):
-    pass
-
-
-def _pacs_patient_request(method, url, study_uid, step, **kwargs):
-    response = requests.request(method, url, timeout=_pacs_delete_timeout(), **kwargs)
-    if not response.ok:
-        raise PacsPatientSyncError(
-            f"Failed to {step} for study {study_uid} in PACS: {response.status_code} {response.text[:200]}"
-        )
-    return response
-
-
-def move_study_to_linked_patient(study_uid):
-    """
-    Moves the study in the PACS to the patient of its active CARE record from an upload without a service
-    request, found under the Study UID lock so that an archive or a re-upload for another patient cannot change
-    it in the meantime. Returns whether the study was moved.
-    """
-    with transaction.atomic():
-        _lock_study_uid(study_uid)
-        dicom_study = (
-            DicomStudy.objects.filter(
-                dicom_study_uid=study_uid,
-                is_archived=False,
-                deleted=False,
-                imaging_study__service_request__isnull=True,
-            )
-            .select_related("imaging_study__patient")
-            .first()
-        )
-        if dicom_study is None:
-            logger.info("DICOM study %s has no active study uploaded without a service request, not moved", study_uid)
-            return False
-        return move_study_to_patient(study_uid, dicom_study.imaging_study.patient)
-
-
-def move_study_to_patient(study_uid, patient):
-    """
-    Files the study under the CARE patient in the PACS: a patient with the CARE patient's UHID (or external id)
-    as Patient ID is created there with their name unless one exists, then the study is moved to it, and the
-    patient it was under is deleted once it has no studies left. A study already under that Patient ID is left
-    as it is. Returns whether the study was moved.
-    """
-    patient_id = get_dicom_patient_id(patient)
-    study = d_query_study(study_uid)
-    if study is None:
-        raise PacsPatientSyncError(f"Study {study_uid} not found in PACS")
-    prior_patient_ids = d_find(study, DICOM_TAG.PatientID.value)
-    if patient_id in prior_patient_ids:
-        return False
-    prior_issuers = d_find(study, DICOM_TAG.IssuerOfPatientID.value)
-
-    existing = _pacs_patient_request(
-        "GET",
-        f"{DCM4CHEE_BASEURL}/rs/patients",
-        study_uid,
-        "look up patient",
-        params={"PatientID": patient_id},
-        headers={"Accept": "application/dicom+json"},
-    )
-    if existing.status_code == 204:
-        _pacs_patient_request(
-            "POST",
-            f"{DCM4CHEE_BASEURL}/rs/patients",
-            study_uid,
-            "create patient",
-            json={
-                DICOM_TAG.PatientID.value: {"vr": "LO", "Value": [patient_id]},
-                "00100010": {"vr": "PN", "Value": [{"Alphabetic": patient.name}]},
-            },
-            headers={"Content-Type": "application/dicom+json"},
-        )
-    _pacs_patient_request(
-        "POST",
-        f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/patient",
-        study_uid,
-        "move study to patient",
-        params={"PatientID": patient_id},
-    )
-    cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
-    logger.info("Moved DICOM study %s to PACS patient %s", study_uid, patient_id)
-
-    if prior_patient_ids and prior_issuers:
-        _delete_empty_pacs_patient(prior_patient_ids[0], prior_issuers[0], study_uid)
-    else:
-        logger.info("DICOM study %s was under a patient without an issuer, not deleting it from PACS", study_uid)
-    return True
-
-
-def _delete_empty_pacs_patient(patient_id, issuer, study_uid):
-    """
-    Deletes the PACS patient `patient_id` of `issuer` if it has no studies. Patient IDs such as placeholders are
-    shared by several PACS patients, so the patient is named by its ID and issuer, which only one of them has.
-    A failure is logged rather than raised, since the study has already been moved.
-    """
-    pid_with_issuer = f"{patient_id}^^^{issuer}"
-    try:
-        studies = requests.get(
-            f"{DCM4CHEE_BASEURL}/rs/studies",
-            params={"PatientID": patient_id, "IssuerOfPatientID": issuer, "limit": 1},
-            headers={"Accept": "application/dicom+json"},
-            timeout=_pacs_delete_timeout(),
-        )
-        if studies.status_code != 204:
-            return
-        response = requests.delete(
-            f"{DCM4CHEE_BASEURL}/rs/patients/{quote(pid_with_issuer, safe='')}", timeout=_pacs_delete_timeout()
-        )
-    except requests.RequestException:
-        logger.warning("Could not delete PACS patient %s after moving study %s", pid_with_issuer, study_uid)
-        return
-    if response.ok:
-        logger.info("Deleted empty PACS patient %s after moving study %s", pid_with_issuer, study_uid)
-    else:
-        logger.warning(
-            "Could not delete PACS patient %s after moving study %s: %s %s",
-            pid_with_issuer,
-            study_uid,
-            response.status_code,
-            response.text[:200],
-        )
