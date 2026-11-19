@@ -41,3 +41,9 @@ DICOM_STUDY_PATIENT_SYNC_SCHEDULED_KEY_TEMPLATE = "radiology:dicom:patient-sync-
 
 # dcm4chee rejection note (code^scheme) applied before a study is deleted from the PACS
 PACS_DELETE_REJECTION_CODE = "113001^DCM"
+
+# PACS details kept in a study's meta when it is archived out of the PACS, and read back from
+# there when it is serialized. The Study Instance UID is kept too, as `archived_study_uid`, but
+# is never read back: an empty study_uid is what marks a study as no longer in the PACS.
+ARCHIVED_STUDY_DETAIL_FIELDS = ("study_date", "study_description", "number_of_series", "number_of_instances")
+ARCHIVED_STUDY_UID_FIELD = "archived_study_uid"

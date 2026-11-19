@@ -4,6 +4,7 @@ from pydantic import UUID4, BaseModel, Field
 
 from care.emr.resources.base import EMRResource
 from care.users.models import User
+from care_radiology.constants import ARCHIVED_STUDY_DETAIL_FIELDS
 from care_radiology.models.dicom_study import DicomStudy
 
 
@@ -51,9 +52,14 @@ class DicomStudyReadSpec(DicomStudyBaseSpec):
     @classmethod
     def perform_extra_serialization(cls, mapping, obj, *args, pacs_details=None, **kwargs):
         super().perform_extra_serialization(mapping, obj)
-        # A study archived out of the PACS has no Study UID and so no PACS details; it is listed
-        # with what the record itself holds - its counts, and who archived it, when and why.
         if not pacs_details:
+            # A study archived out of the PACS has no Study UID and so no details to fetch; the
+            # ones kept on the record when it was archived are returned instead. Its Study UID is
+            # deliberately not read back - an empty study_uid is what marks it as gone from the PACS.
+            meta = obj.meta or {}
+            for field in ARCHIVED_STUDY_DETAIL_FIELDS:
+                if mapping.get(field) is None:
+                    mapping[field] = meta.get(field)
             return
         for field in ("study_date", "study_description", "study_modalities", "study_series"):
             mapping[field] = pacs_details[field]
