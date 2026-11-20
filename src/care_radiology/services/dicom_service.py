@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
@@ -16,10 +17,15 @@ from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     ARCHIVED_STUDY_UID_FIELD,
+    DCM4CHEE_ARCHIVE_BASEURL,
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
+    DICOM_SOP_INSTANCE_CLEANUP_MARKER,
+    DICOM_SOP_INSTANCE_CLEANUP_POLL_INTERVAL,
+    DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT,
+    DICOM_SOP_INSTANCE_CLEANUP_WAIT,
     DICOM_SOP_INSTANCE_KEY_TEMPLATE,
     DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE,
     DICOM_STUDY_UPLOAD_CACHE_TIMEOUT,
@@ -224,13 +230,50 @@ def _seed_sop_set(study_uid):
 def _claim_sop_instance(study_uid, sop_instance_uid):
     """
     Adds the key of the SOP Instance UID, filling the study's keys from the PACS first if needed, and returns it.
-    Returns None when the key is already there: the file is in the PACS or another request is uploading it.
+    Returns None when the key is already there: the file is in the PACS or another request is uploading it. A key
+    held by the cleanup of a failed upload of the file is waited for, since the cleanup releases it.
     """
-    generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
-    key = DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid)
-    if not cache.add(key, True, timeout=_SOP_INSTANCE_KEY_TIMEOUT):
-        return None
-    return key
+    deadline = time.monotonic() + DICOM_SOP_INSTANCE_CLEANUP_WAIT
+    while True:
+        generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
+        key = DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid)
+        if cache.add(key, True, timeout=_SOP_INSTANCE_KEY_TIMEOUT):
+            return key
+        value = cache.get(key)
+        if value is None:
+            # Released since the add, claim it again.
+            continue
+        if not _is_cleanup_marker(value):
+            return None
+        if time.monotonic() >= deadline:
+            raise DicomUploadError(
+                "A failed upload of this file is still being removed from the PACS, try again shortly",
+                status_code=409,
+                extra={"sop_instance_uid": sop_instance_uid},
+            )
+        time.sleep(DICOM_SOP_INSTANCE_CLEANUP_POLL_INTERVAL)
+
+
+def _is_cleanup_marker(value):
+    return isinstance(value, str) and value.startswith(DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(""))
+
+
+def _start_failed_upload_cleanup(study_uid, sop_instance_uid, claim_key):
+    """
+    Hands the claim of a file whose upload to the PACS failed or timed out to a cleanup task, which removes the file
+    from the PACS in case it was stored anyway and then releases the claim.
+    """
+    from care_radiology.tasks.cleanup_failed_upload import cleanup_failed_pacs_upload
+
+    token = uuid.uuid4().hex
+    cache.set(claim_key, DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token), timeout=DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT)
+    try:
+        cleanup_failed_pacs_upload.delay(study_uid, sop_instance_uid, claim_key, token)
+    except Exception:
+        logger.exception(
+            "Could not start the cleanup of the failed upload of %s, releasing its claim", sop_instance_uid
+        )
+        cache.delete(claim_key)
 
 
 def upload_dicom_file(imaging_study, dcm_file, user=None):
@@ -280,19 +323,24 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                     plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT,
                 ),
             )
-        except requests.Timeout as e:
-            raise DicomUploadError(
-                "DCM4CHE upload timeout",
-                status_code=504,
-                extra={"details": str(e)},
-            )
-
-        if upload_response.status_code not in [200, 201]:
-            raise DicomUploadError(
-                "Failed to upload to DCM4CHE",
-                status_code=502,
-                extra={"status_code": upload_response.status_code},
-            )
+            if upload_response.status_code not in [200, 201]:
+                raise DicomUploadError(
+                    "Failed to upload to DCM4CHE",
+                    status_code=502,
+                    extra={"status_code": upload_response.status_code},
+                )
+        except (requests.RequestException, DicomUploadError) as e:
+            # The PACS may have stored the file anyway, so its claim goes to the cleanup straight away.
+            if claim_key:
+                _start_failed_upload_cleanup(study_uid, sop_instance_uid, claim_key)
+                claim_key = None
+            if isinstance(e, requests.Timeout):
+                raise DicomUploadError(
+                    "DCM4CHE upload timeout",
+                    status_code=504,
+                    extra={"details": str(e)},
+                ) from e
+            raise
         stored = True
 
         with transaction.atomic():
@@ -668,6 +716,78 @@ def delete_study_from_pacs(study_uid):
     else:
         logger.info("DICOM study %s was not found in PACS, nothing to delete", study_uid)
     return deleted
+
+
+def _find_instance_series_uid(study_uid, sop_instance_uid):
+    """The Series UID of the instance in the PACS, or None when the PACS does not have it."""
+    try:
+        response = requests.get(
+            f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/instances",
+            params={"SOPInstanceUID": sop_instance_uid, "includefield": DICOM_TAG.SeriesInstanceUID.value},
+            headers={"Accept": "application/dicom+json"},
+            timeout=_pacs_delete_timeout(),
+        )
+    except requests.RequestException as e:
+        raise PacsDeleteError(
+            "Failed to find instance in PACS",
+            status_code=504 if isinstance(e, requests.Timeout) else 502,
+            extra={"study_uid": study_uid, "details": str(e)},
+        ) from e
+    # QIDO-RS answers a query with no matches with 204 and no body.
+    if response.status_code in (204, 404):
+        return None
+    if not response.ok:
+        raise PacsDeleteError(
+            "Failed to find instance in PACS", extra={"study_uid": study_uid, "status_code": response.status_code}
+        )
+    instances = response.json()
+    return d_find(instances[0], DICOM_TAG.SeriesInstanceUID.value)[0] if instances else None
+
+
+def delete_instance_from_pacs(study_uid, sop_instance_uid):
+    """
+    Permanently removes one instance from dcm4chee, returning whether the PACS had it.
+
+    dcm4chee keeps a rejected instance and silently discards a later store of it, so the instance is rejected with
+    PACS_DELETE_REJECTION_CODE and then the instances rejected with that code are deleted, which lets the file be
+    stored again.
+    """
+    series_uid = _find_instance_series_uid(study_uid, sop_instance_uid)
+    if series_uid is None:
+        return False
+    rejection_code = quote(PACS_DELETE_REJECTION_CODE, safe="")
+    instance_url = (
+        f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/series/{quote(series_uid, safe='')}"
+        f"/instances/{quote(sop_instance_uid, safe='')}"
+    )
+    _pacs_request("POST", f"{instance_url}/reject/{rejection_code}", study_uid, "reject")
+    _pacs_request("DELETE", f"{DCM4CHEE_ARCHIVE_BASEURL}/reject/{rejection_code}", study_uid, "delete")
+    cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
+    logger.info("Deleted instance %s of DICOM study %s from PACS", sop_instance_uid, study_uid)
+    return True
+
+
+def cleanup_failed_upload(study_uid, sop_instance_uid, claim_key, token):
+    """
+    Removes the file of a failed upload from the PACS, in case the PACS stored it anyway, then drops the study's
+    upload cache when the PACS has nothing else of the study, and releases the file's claim, which is released
+    as well when the PACS does not have the file. Skipped when the claim
+    no longer holds this cleanup's marker: it expired and a later upload of the file may hold it.
+    Raises PacsDeleteError, keeping the claim, when the PACS cannot be reached.
+    """
+    marker = DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token)
+    if cache.get(claim_key) != marker:
+        logger.warning("Cleanup of the failed upload of %s expired before it ran, skipped", sop_instance_uid)
+        return
+    delete_instance_from_pacs(study_uid, sop_instance_uid)
+    if d_query_study_sop_instance_uids(study_uid) == []:
+        invalidate_study_upload_cache(study_uid)
+    release_failed_upload_claim(claim_key, token)
+
+
+def release_failed_upload_claim(claim_key, token):
+    if cache.get(claim_key) == DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token):
+        cache.delete(claim_key)
 
 
 def archive_study(study, archive_reason, archived_by=None):

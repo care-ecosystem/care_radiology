@@ -2,6 +2,9 @@ from care_radiology.settings import plugin_settings
 
 DCM4CHEE_BASEURL = plugin_settings.CARE_RADIOLOGY_DCM4CHEE_DICOMWEB_BASEURL
 
+# The archive's own REST root (without /aets/{AETitle}), which serves the archive-wide operations.
+DCM4CHEE_ARCHIVE_BASEURL = DCM4CHEE_BASEURL.split("/aets/", 1)[0]
+
 MPPS_STATUS_SCAN_STARTED = "Scan Started"
 MPPS_STATUS_SCAN_COMPLETED = "Scan Completed"
 MPPS_STATUS_DISCONTINUED = "Scan Cancelled"
@@ -37,6 +40,17 @@ DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE = "radiology:dicom:study-sops:{}"
 # One key per SOP Instance UID a study has in the PACS or that an upload has claimed, keyed by Study UID,
 # generation and SOP Instance UID.
 DICOM_SOP_INSTANCE_KEY_TEMPLATE = "radiology:dicom:study-sops:{}:{}:{}"
+
+# Value a SOP Instance key holds while the files of its failed upload are removed from the PACS, with the token of
+# that cleanup. An upload of the same file waits for the key to be released instead of being rejected as a duplicate.
+DICOM_SOP_INSTANCE_CLEANUP_MARKER = "cleanup:{}"
+
+# Expiry of a cleanup marker, so a cleanup that never runs does not keep the file from being uploaded again.
+DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT = 40
+
+# How long an upload waits for the cleanup of a failed upload of the same file, and how often it checks.
+DICOM_SOP_INSTANCE_CLEANUP_WAIT = 10
+DICOM_SOP_INSTANCE_CLEANUP_POLL_INTERVAL = 0.2
 
 # Expiry of the study links, refreshed on every upload of the study, and of a study's SOP Instance generation,
 # which is not, so an active study's instances are read from the PACS again once it expires.
