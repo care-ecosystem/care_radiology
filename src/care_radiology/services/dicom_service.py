@@ -118,14 +118,13 @@ def _load_study_links(study_uid):
     """The imaging study, patient, encounter and service request of each active CARE record of the Study UID."""
     studies = (
         DicomStudy.objects.filter(dicom_study_uid=study_uid, is_archived=False)
-        .select_related("imaging_study__patient", "imaging_study__encounter", "imaging_study__service_request")
+        .select_related("imaging_study__encounter", "imaging_study__service_request")
         .order_by("created_date")
     )
     return [
         {
             "imaging_study_id": study.imaging_study_id,
             "patient_id": study.imaging_study.patient_id,
-            "patient_external_id": str(study.imaging_study.patient.external_id),
             "encounter_id": study.imaging_study.encounter_id,
             "encounter_external_id": str(study.imaging_study.encounter.external_id),
             "service_request_id": (
@@ -375,13 +374,8 @@ def _check_study_not_linked_elsewhere(imaging_study, study_uid, links):
     another imaging study holds it, which is only allowed with the check disabled, and never across patients.
     """
     others = [link for link in links if link["imaging_study_id"] != imaging_study.id]
-    # Checked over every record rather than one, since with the check disabled the UID can
-    # already sit under several imaging studies.
-    other_patient = next((link for link in others if link["patient_id"] != imaging_study.patient_id), None)
-    if other_patient is not None:
-        raise StudyLinkConflictError(
-            f"Study is already linked to another patient: {other_patient['patient_external_id']}", study_uid=study_uid
-        )
+    if any(link["patient_id"] != imaging_study.patient_id for link in others):
+        raise StudyLinkConflictError("Study is already linked to another patient", study_uid=study_uid)
 
     if not others:
         return False
