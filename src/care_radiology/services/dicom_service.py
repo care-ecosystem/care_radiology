@@ -14,6 +14,7 @@ from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
+    ARCHIVED_STUDY_UID_FIELD,
     DCM4CHEE_BASEURL,
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
@@ -24,6 +25,7 @@ from care_radiology.constants import (
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.settings import plugin_settings
+from care_radiology.utils.patient import get_dicom_patient_id
 from care_radiology.utils.dicom import (
     DICOM_TAG,
     DicomParseError,
@@ -61,6 +63,37 @@ class PacsDeleteError(Exception):
         self.message = message
         self.status_code = status_code
         self.extra = extra or {}
+
+
+def _snapshot_study_details(study):
+    """
+    Keeps the PACS details of a study that is about to be deleted from the PACS on the record in meta
+    """
+    try:
+        details = fetch_study(study)
+    except Exception:
+        logger.exception("Could not read DICOM study %s from PACS before archiving", study.dicom_study_uid)
+        return
+    if not details:
+        return
+    series = details.get("study_series") or []
+    study.meta = {
+        **(study.meta or {}),
+        "study_date": details.get("study_date"),
+        "study_description": details.get("study_description"),
+        "number_of_series": len(series),
+        "number_of_instances": count_study_instances(series),
+    }
+
+
+def _clear_study_uid(study):
+    """
+    Drops the Study Instance UID of a study whose files were deleted from the PACS, added reference in meta
+    """
+    if not study.dicom_study_uid:
+        return
+    study.meta = {**(study.meta or {}), ARCHIVED_STUDY_UID_FIELD: study.dicom_study_uid}
+    study.dicom_study_uid = ""
 
 
 def _lock_study_uid(study_uid):
@@ -210,6 +243,16 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
             cache.delete(lock_key)
 
 
+def count_study_instances(series):
+    """
+    Totals the instances across a study's series, or None when a count cannot be read.
+    """
+    try:
+        return sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
+    except (TypeError, ValueError):
+        return None
+
+
 def save_study_counts(dicom_study, study_details):
     """
     Saves the study's series and instance counts from its PACS details, only ever raising them,
@@ -217,9 +260,8 @@ def save_study_counts(dicom_study, study_details):
     is logged and skipped rather than failing the upload.
     """
     series = study_details["study_series"]
-    try:
-        number_of_instances = sum(int(s["series_instance_count"][0]) for s in series if s["series_instance_count"])
-    except (TypeError, ValueError):
+    number_of_instances = count_study_instances(series)
+    if number_of_instances is None:
         logger.warning("Study %s has an unreadable series instance count, counts not updated", dicom_study.pk)
         return
 
@@ -336,7 +378,7 @@ def imaging_study_for_encounter(encounter):
     return imaging_study
 
 
-def process_mpps_webhook(facility, service_request_id, study_status):
+def process_mpps_webhook(facility, service_request_id, study_status, user):
     """
     Sets the service request's imaging study to `study_status`, then adds the facility tag whose
     display is the status's MPPS status (Scan Started, Scan Completed or Scan Cancelled) to the
@@ -379,7 +421,8 @@ def process_mpps_webhook(facility, service_request_id, study_status):
             try:
                 tags.append(tag_config.id)
                 service_request.tags = tags
-                service_request.save(update_fields=["tags"])
+                service_request.updated_by = user
+                service_request.save(update_fields=["tags", "updated_by", "modified_date"])
             except Exception as e:
                 logger.exception("[MPPS] Error updating tags")
                 raise APIException("Error updating tags") from e
@@ -401,6 +444,8 @@ def fetch_study(dicom_study):
         return values[0] if values else None
 
     study_uid = dicom_study.dicom_study_uid
+    if not study_uid:
+        return None
     key = DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid)
     # The cache is per Study UID, which an archived record and its re-upload share, so the
     # record's own external_id is added on every return rather than cached.
@@ -454,7 +499,8 @@ def fetch_study(dicom_study):
 def fetch_studies(dicom_studies):
     """
     Fetches the PACS details of each study in parallel and returns them keyed by study id. A study
-    whose details cannot be fetched is logged and left out.
+    whose details cannot be fetched is logged and left out, as is one that has no Study UID left,
+    whose files were deleted from the PACS when it was archived.
     """
 
     def fetch_or_none(dicom_study):
@@ -464,6 +510,7 @@ def fetch_studies(dicom_studies):
             logger.exception("Could not fetch study %s from PACS", dicom_study.dicom_study_uid)
             return None
 
+    dicom_studies = [study for study in dicom_studies if study.dicom_study_uid]
     if not dicom_studies:
         return {}
     with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
@@ -532,9 +579,10 @@ def archive_study(study, archive_reason, archived_by=None):
 
     With CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE enabled, the study's files are
     deleted from the PACS first; if that fails, PacsDeleteError is raised and the study
-    is left unarchived so the archive can be retried. A study deleted from the PACS is
-    also soft-deleted in CARE, along with any earlier archived records of the same Study
-    Instance UID.
+    is left unarchived so the archive can be retried. A study deleted from the PACS keeps its
+    PACS details in `meta` and has its Study Instance UID cleared, as does any earlier archived
+    record of the same UID, since their files are gone too. The CARE records are kept and stay
+    listed as archived, with their archive reason and the details kept on the record itself.
     """
     with transaction.atomic():
         deleted_from_pacs = False
@@ -554,24 +602,34 @@ def archive_study(study, archive_reason, archived_by=None):
                     study.dicom_study_uid,
                 )
             else:
+                siblings = list(
+                    DicomStudy.objects.filter(
+                        dicom_study_uid=study.dicom_study_uid, is_archived=True
+                    ).exclude(pk=study.pk)
+                )
+                for record in (study, *siblings):
+                    _snapshot_study_details(record)
+
                 delete_study_from_pacs(study.dicom_study_uid)
                 deleted_from_pacs = True
 
-                DicomStudy.objects.filter(
-                    dicom_study_uid=study.dicom_study_uid, is_archived=True, deleted=False
-                ).exclude(pk=study.pk).update(deleted=True, modified_date=timezone.now())
+                for sibling in siblings:
+                    _clear_study_uid(sibling)
+                    sibling.save(update_fields=["dicom_study_uid", "meta", "modified_date"])
 
         study.is_archived = True
         study.archive_reason = archive_reason
         study.archived_datetime = timezone.now()
         study.archived_by = archived_by
-        study.deleted = study.deleted or deleted_from_pacs
+        if deleted_from_pacs:
+            _clear_study_uid(study)
         update_fields = [
             "is_archived",
             "archive_reason",
             "archived_datetime",
             "archived_by",
-            "deleted",
+            "dicom_study_uid",
+            "meta",
             "modified_date",
         ]
         if archived_by:
@@ -580,3 +638,127 @@ def archive_study(study, archive_reason, archived_by=None):
         study.save(update_fields=update_fields)
 
     return study
+
+
+class PacsPatientSyncError(Exception):
+    pass
+
+
+def _pacs_patient_request(method, url, study_uid, step, **kwargs):
+    response = requests.request(method, url, timeout=_pacs_delete_timeout(), **kwargs)
+    if not response.ok:
+        raise PacsPatientSyncError(
+            f"Failed to {step} for study {study_uid} in PACS: {response.status_code} {response.text[:200]}"
+        )
+    return response
+
+
+def move_study_to_linked_patient(study_uid):
+    """
+    Moves the study in the PACS to the patient of its active CARE record from an upload without a service
+    request, found under the Study UID lock so that an archive or a re-upload for another patient cannot change
+    it in the meantime. Returns whether the study was moved.
+    """
+    with transaction.atomic():
+        _lock_study_uid(study_uid)
+        dicom_study = (
+            DicomStudy.objects.filter(
+                dicom_study_uid=study_uid,
+                is_archived=False,
+                deleted=False,
+                imaging_study__service_request__isnull=True,
+            )
+            .select_related("imaging_study__patient")
+            .first()
+        )
+        if dicom_study is None:
+            logger.info("DICOM study %s has no active study uploaded without a service request, not moved", study_uid)
+            return False
+        return move_study_to_patient(study_uid, dicom_study.imaging_study.patient)
+
+
+def move_study_to_patient(study_uid, patient):
+    """
+    Files the study under the CARE patient in the PACS: a patient with the CARE patient's UHID (or external id)
+    as Patient ID is created there with their name unless one exists, then the study is moved to it, and the
+    patient it was under is deleted once it has no studies left. A study already under that Patient ID is left
+    as it is. Returns whether the study was moved.
+    """
+    patient_id = get_dicom_patient_id(patient)
+    study = d_query_study(study_uid)
+    if study is None:
+        raise PacsPatientSyncError(f"Study {study_uid} not found in PACS")
+    prior_patient_ids = d_find(study, DICOM_TAG.PatientID.value)
+    if patient_id in prior_patient_ids:
+        return False
+    prior_issuers = d_find(study, DICOM_TAG.IssuerOfPatientID.value)
+
+    existing = _pacs_patient_request(
+        "GET",
+        f"{DCM4CHEE_BASEURL}/rs/patients",
+        study_uid,
+        "look up patient",
+        params={"PatientID": patient_id},
+        headers={"Accept": "application/dicom+json"},
+    )
+    if existing.status_code == 204:
+        _pacs_patient_request(
+            "POST",
+            f"{DCM4CHEE_BASEURL}/rs/patients",
+            study_uid,
+            "create patient",
+            json={
+                DICOM_TAG.PatientID.value: {"vr": "LO", "Value": [patient_id]},
+                "00100010": {"vr": "PN", "Value": [{"Alphabetic": patient.name}]},
+            },
+            headers={"Content-Type": "application/dicom+json"},
+        )
+    _pacs_patient_request(
+        "POST",
+        f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/patient",
+        study_uid,
+        "move study to patient",
+        params={"PatientID": patient_id},
+    )
+    cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
+    logger.info("Moved DICOM study %s to PACS patient %s", study_uid, patient_id)
+
+    if prior_patient_ids and prior_issuers:
+        _delete_empty_pacs_patient(prior_patient_ids[0], prior_issuers[0], study_uid)
+    else:
+        logger.info("DICOM study %s was under a patient without an issuer, not deleting it from PACS", study_uid)
+    return True
+
+
+def _delete_empty_pacs_patient(patient_id, issuer, study_uid):
+    """
+    Deletes the PACS patient `patient_id` of `issuer` if it has no studies. Patient IDs such as placeholders are
+    shared by several PACS patients, so the patient is named by its ID and issuer, which only one of them has.
+    A failure is logged rather than raised, since the study has already been moved.
+    """
+    pid_with_issuer = f"{patient_id}^^^{issuer}"
+    try:
+        studies = requests.get(
+            f"{DCM4CHEE_BASEURL}/rs/studies",
+            params={"PatientID": patient_id, "IssuerOfPatientID": issuer, "limit": 1},
+            headers={"Accept": "application/dicom+json"},
+            timeout=_pacs_delete_timeout(),
+        )
+        if studies.status_code != 204:
+            return
+        response = requests.delete(
+            f"{DCM4CHEE_BASEURL}/rs/patients/{quote(pid_with_issuer, safe='')}", timeout=_pacs_delete_timeout()
+        )
+    except requests.RequestException:
+        logger.warning("Could not delete PACS patient %s after moving study %s", pid_with_issuer, study_uid)
+        return
+    if response.ok:
+        logger.info("Deleted empty PACS patient %s after moving study %s", pid_with_issuer, study_uid)
+    else:
+        logger.warning(
+            "Could not delete PACS patient %s after moving study %s: %s %s",
+            pid_with_issuer,
+            study_uid,
+            response.status_code,
+            response.text[:200],
+        )
