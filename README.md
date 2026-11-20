@@ -115,8 +115,6 @@ radiology_plug = Plug(
         "CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE": False,
         "CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER": True,
         "CARE_RADIOLOGY_UNIQUE_STUDY_PER_SR": True,
-        "CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED": False,
-        "CARE_RADIOLOGY_PACS_PATIENT_SYNC_DELAY_SECONDS": 10,
     },
 )
 plugs = [radiology_plug]
@@ -155,28 +153,9 @@ The files are deleted before the study is marked archived. If the PACS delete fa
 
 Uploading a study again after it was archived creates a new, active CARE study record under the same imaging study. The archived record is left as it is. If the archive did not delete the files from the PACS, re-uploading the same files is rejected as a duplicate (see `CARE_RADIOLOGY_REJECT_DUPLICATE_SOP_INSTANCE`).
 
-### Moving Studies to the CARE Patient in the PACS
+### Patient ID of Uploaded Files
 
-A DICOM file uploaded to `patient/{patient_id}/imaging_study/upload/` without a `service_request_id` keeps the Patient ID (0010,0020) it was created with, often a placeholder such as `0`. The PACS, and the viewer's study list, then group it with every other patient's studies that carry the same ID. With this feature enabled, each such study is moved in dcm4chee to a patient whose Patient ID is the CARE patient's UHID, or the patient's external id when they have no UHID.
-
-To enable it, set `CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED` to `True` in the plugin `configs` or through an environment variable of the same name.
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| `CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED` | `False` | Moves studies uploaded without a service request to the CARE patient in the PACS. |
-| `CARE_RADIOLOGY_PACS_PATIENT_SYNC_DELAY_SECONDS` | `10` | Seconds to wait after a study's last uploaded file before moving it. |
-
-The move runs in a Celery task, so the CARE Celery worker must be running, and the web and worker processes must share the same Redis cache. Restart the worker whenever the plugin is updated, together with the web process: a worker still running the previous version does not have the latest behaviour, such as deleting the emptied PACS patient, and can fail tasks queued by the new version. Each study has one task, which waits until no file of the study has been uploaded for `CARE_RADIOLOGY_PACS_PATIENT_SYNC_DELAY_SECONDS`, then:
-
-1. Finds the study's active CARE record uploaded without a service request, under the same lock as archiving and uploading, and moves the study to that record's patient. A study that has since been archived, or linked to a service request, is not moved.
-2. Leaves a study already under that Patient ID as it is.
-3. Looks the patient up in the PACS by Patient ID and creates it with the CARE patient's name if there is none. An existing PACS patient's name is not changed.
-4. Moves the study with `POST /rs/studies/{study}/patient?PatientID=...`.
-5. Deletes the PACS patient the study was under once it has no studies left. Placeholder IDs such as `0` are shared by several PACS patients, so the patient is identified by its Patient ID and Issuer of Patient ID; one without an issuer is not deleted. A failed delete is logged, and the study stays moved.
-
-PACS errors are retried up to 5 times with backoff, then logged.
-
-**A file of the study uploaded after the move is rejected by the PACS (`409`):** it still carries the old Patient ID, which no longer matches the study's patient. Upload all files of a study without pausing longer than the delay, or raise the delay. Uploads with a service request and the external upload are not affected by this feature.
+Every upload sends the CARE patient's Patient ID with the file: their UHID, or their external id when they have no UHID. CARE sends it as a query parameter of the STOW-RS request, `POST /rs/studies?PatientID=<id>`. dcm4chee sets each query parameter on the stored file, overwriting the file's own value (its default `updatePolicy=OVERWRITE`). The study is then filed under the CARE patient in the PACS, while the file CARE received is left unchanged.
 
 ### External APIs
 
