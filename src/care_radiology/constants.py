@@ -37,16 +37,19 @@ DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE = "radiology:dicom:study-links:{}"
 # drops them all at once: later uploads fill a new generation, and the old keys expire.
 DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE = "radiology:dicom:study-sops:{}"
 
-# One key per SOP Instance UID a study has in the PACS or that an upload has claimed, keyed by Study UID,
-# generation and SOP Instance UID.
+# One key per SOP Instance UID a study has in the PACS, keyed by Study UID, generation and SOP Instance UID.
 DICOM_SOP_INSTANCE_KEY_TEMPLATE = "radiology:dicom:study-sops:{}:{}:{}"
 
-# Value a SOP Instance key holds while the files of its failed upload are removed from the PACS, with the token of
-# that cleanup. An upload of the same file waits for the key to be released instead of being rejected as a duplicate.
+# The claim of an upload in progress, keyed by Study UID and SOP Instance UID. It is kept apart from the study's
+# generation, so a generation that expires during the upload does not let a second upload of the file through.
+DICOM_SOP_INSTANCE_UPLOAD_KEY_TEMPLATE = "radiology:dicom:sop-upload:{}:{}"
+
+# Value an upload claim holds while the files of its failed upload are removed from the PACS, with the token of
+# that cleanup. An upload of the same file waits for the claim to be released instead of being rejected as a duplicate.
 DICOM_SOP_INSTANCE_CLEANUP_MARKER = "cleanup:{}"
 
 # Expiry of a cleanup marker, so a cleanup that never runs does not keep the file from being uploaded again.
-DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT = 40
+DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT = 60
 
 # How long an upload waits for the cleanup of a failed upload of the same file, and how often it checks.
 DICOM_SOP_INSTANCE_CLEANUP_WAIT = 10

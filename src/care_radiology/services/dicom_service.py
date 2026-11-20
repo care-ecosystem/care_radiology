@@ -27,6 +27,7 @@ from care_radiology.constants import (
     DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT,
     DICOM_SOP_INSTANCE_CLEANUP_WAIT,
     DICOM_SOP_INSTANCE_KEY_TEMPLATE,
+    DICOM_SOP_INSTANCE_UPLOAD_KEY_TEMPLATE,
     DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE,
     DICOM_STUDY_UPLOAD_CACHE_TIMEOUT,
     MPPS_TAG_DISPLAY_BY_STATUS,
@@ -227,19 +228,26 @@ def _seed_sop_set(study_uid):
     return current
 
 
+def _upload_claim_timeout():
+    """Expiry of an upload claim: the upload to the PACS and the study query that follows it."""
+    return (
+        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT * 2
+        + plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT
+        + plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT
+    )
+
+
 def _claim_sop_instance(study_uid, sop_instance_uid):
     """
-    Adds the key of the SOP Instance UID, filling the study's keys from the PACS first if needed, and returns it.
-    Returns None when the key is already there: the file is in the PACS or another request is uploading it. A key
-    held by the cleanup of a failed upload of the file is waited for, since the cleanup releases it.
+    Adds the upload claim of the SOP Instance UID and returns its key, once the study's keys, filled from the PACS
+    first if needed, show the file is not stored. Returns None when another request is uploading the file or the
+    PACS has it. A claim held by the cleanup of a failed upload of the file is waited for, since the cleanup
+    releases it.
     """
+    claim_key = DICOM_SOP_INSTANCE_UPLOAD_KEY_TEMPLATE.format(study_uid, sop_instance_uid)
     deadline = time.monotonic() + DICOM_SOP_INSTANCE_CLEANUP_WAIT
-    while True:
-        generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
-        key = DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid)
-        if cache.add(key, True, timeout=_SOP_INSTANCE_KEY_TIMEOUT):
-            return key
-        value = cache.get(key)
+    while not cache.add(claim_key, True, timeout=_upload_claim_timeout()):
+        value = cache.get(claim_key)
         if value is None:
             # Released since the add, claim it again.
             continue
@@ -252,6 +260,35 @@ def _claim_sop_instance(study_uid, sop_instance_uid):
                 extra={"sop_instance_uid": sop_instance_uid},
             )
         time.sleep(DICOM_SOP_INSTANCE_CLEANUP_POLL_INTERVAL)
+
+    try:
+        generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
+    except Exception:
+        cache.delete(claim_key)
+        raise
+    if cache.get(DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid)) is not None:
+        cache.delete(claim_key)
+        return None
+    return claim_key
+
+
+def _release_stored_sop_instance(study_uid, sop_instance_uid, claim_key):
+    """
+    Adds the key of a file the PACS stored to the study's current generation, then releases its upload claim. Run
+    once the upload's record is committed, so a generation filled from the PACS after the release has the file.
+    """
+    try:
+        generation = cache.get(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid)) or _seed_sop_set(study_uid)
+        cache.set(
+            DICOM_SOP_INSTANCE_KEY_TEMPLATE.format(study_uid, generation, sop_instance_uid),
+            True,
+            timeout=_SOP_INSTANCE_KEY_TIMEOUT,
+        )
+    except Exception:
+        # Without a generation, the next upload of the study fills one from the PACS, which has the file.
+        logger.exception("Could not add the stored file %s to the study's keys", sop_instance_uid)
+    finally:
+        cache.delete(claim_key)
 
 
 def _is_cleanup_marker(value):
@@ -279,8 +316,9 @@ def _start_failed_upload_cleanup(study_uid, sop_instance_uid, claim_key):
 def upload_dicom_file(imaging_study, dcm_file, user=None):
     """
     Uploads a DICOM file to the PACS. Its Study UID is checked against the cached links of the study, and its
-    SOP Instance UID is claimed among the study's cached SOP Instance keys, which rejects a file already in the
-    PACS or being uploaded by another request. The PACS stores the file under the CARE patient's Patient ID.
+    SOP Instance UID is claimed for the upload, which rejects a file another request is uploading or that the
+    study's cached SOP Instance keys show in the PACS. The claim is kept apart from those expiring keys until the
+    upload's record is committed. The PACS stores the file under the CARE patient's Patient ID.
     """
     if not dcm_file:
         raise DicomUploadError("No file provided", status_code=400)
@@ -342,6 +380,8 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                 ) from e
             raise
         stored = True
+        if claim_key:
+            transaction.on_commit(lambda: _release_stored_sop_instance(study_uid, sop_instance_uid, claim_key))
 
         with transaction.atomic():
             _lock_study_uid(study_uid)
