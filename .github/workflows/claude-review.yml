@@ -31,6 +31,14 @@ jobs:
     # Pinned to @dev while the reviewer is being tuned: a rule or workflow change takes
     # effect immediately, with no tag to move. Repin to @v1 once this is merged to main
     # and tagged, so a workflow change becomes a deliberate rollout rather than a surprise.
+    # Required. A called workflow can only maintain or REDUCE the caller's permissions,
+    # never elevate them, and id-token: write is not in the default GITHUB_TOKEN set. Without
+    # this block the call is an elevation and the run fails at startup before any step runs.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
     uses: care-ecosystem/care_ci/.github/workflows/plugin-review.yml@dev
     with:
       layer: backend
