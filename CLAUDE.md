@@ -15,10 +15,12 @@ CARE backend plugin. PRs are reviewed by care_ci; the rules live in
   `DICOM_CARE_TYPE` → `ModalityDevice` and `DICOM_ENABLER_CARE_TYPE` → `ModalityEnablerDevice`.
   It then calls `plugin_settings.validate()`, skipped for `BUILD_TIME_COMMANDS` so CARE images
   can build.
-- `urls.py` exports `urlpatterns` from a router. Basenames use the `radiology_<resource>` style
-  (`radiology_dicom`, `radiology_imaging_study`), not `<plug>__<resource>`.
-- Celery tasks in `tasks/`: `archive_old_studies`, `assign_accession_number`,
-  `deactivate_imaging_study`, `move_study_to_patient`.
+- `urls.py` exports `urlpatterns` from a router. Basenames are mixed and that is fine:
+  `radiology_dicom`, `radiology_observation_result_template`, `radiology_external`, but the
+  imaging-study one is bare `imaging_study`. Neither style is a finding.
+- Celery task function names, which differ from their module names: `archive_old_dicom_studies`
+  (in `archive_old_studies.py`), `assign_accession_number`, `deactivate_imaging_study`, and
+  `move_study_to_care_patient` (in `move_study_to_patient.py`).
 
 ## Integrates with
 - Core models extended via the `extensions` JSONField: none.
@@ -28,5 +30,5 @@ CARE backend plugin. PRs are reviewed by care_ci; the rules live in
 - Frontend counterpart: `care_radiology_fe`.
 
 ## Deliberate deviations
-- Router basenames are `radiology_*` rather than the `care_hello` template's `<plug>__<resource>`.
-  This is settled; do not flag it.
+- Router basenames do not follow the `care_hello` template's `<plug>__<resource>`, and are not
+  even internally consistent. This is settled; do not flag either style.
