@@ -22,6 +22,7 @@ from care_radiology.constants import (
     DICOM_STUDY_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LINKS_CACHE_KEY_TEMPLATE,
     DICOM_STUDY_LOCK_KEY_TEMPLATE,
+    DICOM_SOP_INSTANCE_CLEANUP_MARGIN,
     DICOM_SOP_INSTANCE_CLEANUP_MARKER,
     DICOM_SOP_INSTANCE_CLEANUP_POLL_INTERVAL,
     DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT,
@@ -784,14 +785,16 @@ def _find_instance_series_uid(study_uid, sop_instance_uid):
     return d_find(instances[0], DICOM_TAG.SeriesInstanceUID.value)[0] if instances else None
 
 
-def delete_instance_from_pacs(study_uid, sop_instance_uid):
+def delete_instance_from_pacs(study_uid, sop_instance_uid, before_request=None):
     """
     Permanently removes one instance from dcm4chee, returning whether the PACS had it.
 
     dcm4chee keeps a rejected instance and silently discards a later store of it, so the instance is rejected with
     PACS_DELETE_REJECTION_CODE and then the instances rejected with that code are deleted, which lets the file be
-    stored again.
+    stored again. `before_request`, when given, is called before each PACS request and may raise to stop the delete.
     """
+    before_request = before_request or (lambda: None)
+    before_request()
     series_uid = _find_instance_series_uid(study_uid, sop_instance_uid)
     if series_uid is None:
         return False
@@ -800,32 +803,87 @@ def delete_instance_from_pacs(study_uid, sop_instance_uid):
         f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/series/{quote(series_uid, safe='')}"
         f"/instances/{quote(sop_instance_uid, safe='')}"
     )
+    before_request()
     _pacs_request("POST", f"{instance_url}/reject/{rejection_code}", study_uid, "reject")
+    before_request()
     _pacs_request("DELETE", f"{DCM4CHEE_ARCHIVE_BASEURL}/reject/{rejection_code}", study_uid, "delete")
     cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
     logger.info("Deleted instance %s of DICOM study %s from PACS", sop_instance_uid, study_uid)
     return True
 
 
+class CleanupClaimLost(Exception):
+    """The claim no longer holds the cleanup's marker, or cannot be kept long enough for its next PACS request."""
+
+
+def _cleanup_request_timeout():
+    """Longest one PACS request of a cleanup can take: connecting, then reading the response."""
+    return plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT + plugin_settings.CARE_RADIOLOGY_PACS_QUERY_TIMEOUT
+
+
+def _claim_ttl(claim_key):
+    """Seconds left before the claim expires, None when the cache cannot tell (only django-redis can)."""
+    ttl = getattr(cache, "ttl", None)
+    return ttl(claim_key) if ttl else None
+
+
+def _hold_cleanup_claim(claim_key, token, seconds):
+    """
+    Makes sure the claim holds this cleanup's marker for at least `seconds` more, extending it when needed, so no
+    upload can claim the file before a request sent now finishes. Raises CleanupClaimLost otherwise.
+
+    The TTL is read before the marker: a marker read right after a TTL above the margin is the same key, and it
+    cannot expire before the extension that follows. A marker nearer to expiry is not extended, since an upload
+    could claim the file between the read and the extension.
+    """
+    remaining = _claim_ttl(claim_key)
+    if cache.get(claim_key) != DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token):
+        raise CleanupClaimLost
+    if remaining is not None:
+        if remaining >= seconds + DICOM_SOP_INSTANCE_CLEANUP_MARGIN:
+            return
+        if remaining <= DICOM_SOP_INSTANCE_CLEANUP_MARGIN:
+            raise CleanupClaimLost
+    if not cache.touch(claim_key, seconds + DICOM_SOP_INSTANCE_CLEANUP_MARGIN):
+        raise CleanupClaimLost
+
+
 def cleanup_failed_upload(study_uid, sop_instance_uid, claim_key, token):
     """
     Removes the file of a failed upload from the PACS, in case the PACS stored it anyway, then drops the study's
     upload cache when the PACS has nothing else of the study, and releases the file's claim, which is released
-    as well when the PACS does not have the file. Skipped when the claim
-    no longer holds this cleanup's marker: it expired and a later upload of the file may hold it.
+    as well when the PACS does not have the file.
+
+    The claim keeps this cleanup's marker until every PACS request and the cache drop are done: before each one the
+    marker is checked and extended to outlast it, so a new upload of the file cannot start while the cleanup may
+    still delete it. Stopped, leaving the claim to expire, when the marker expired or is too close to expiry: a
+    later upload of the file may hold the claim by then.
     Raises PacsDeleteError, keeping the claim, when the PACS cannot be reached.
     """
-    marker = DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token)
-    if cache.get(claim_key) != marker:
-        logger.warning("Cleanup of the failed upload of %s expired before it ran, skipped", sop_instance_uid)
+
+    def hold():
+        _hold_cleanup_claim(claim_key, token, _cleanup_request_timeout())
+
+    try:
+        delete_instance_from_pacs(study_uid, sop_instance_uid, before_request=hold)
+        hold()
+        if d_query_study_sop_instance_uids(study_uid) == []:
+            hold()
+            invalidate_study_upload_cache(study_uid)
+    except CleanupClaimLost:
+        logger.warning("Claim of the failed upload of %s expired during its cleanup, stopped", sop_instance_uid)
         return
-    delete_instance_from_pacs(study_uid, sop_instance_uid)
-    if d_query_study_sop_instance_uids(study_uid) == []:
-        invalidate_study_upload_cache(study_uid)
     release_failed_upload_claim(claim_key, token)
 
 
 def release_failed_upload_claim(claim_key, token):
+    """
+    Releases the claim when it holds this cleanup's marker. A marker too close to expiry is left to expire, as an
+    upload could claim the file between the read and the delete, which would then drop that upload's claim.
+    """
+    remaining = _claim_ttl(claim_key)
+    if remaining is not None and remaining <= DICOM_SOP_INSTANCE_CLEANUP_MARGIN:
+        return
     if cache.get(claim_key) == DICOM_SOP_INSTANCE_CLEANUP_MARKER.format(token):
         cache.delete(claim_key)
 

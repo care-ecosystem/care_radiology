@@ -48,8 +48,13 @@ DICOM_SOP_INSTANCE_UPLOAD_KEY_TEMPLATE = "radiology:dicom:sop-upload:{}:{}"
 # that cleanup. An upload of the same file waits for the claim to be released instead of being rejected as a duplicate.
 DICOM_SOP_INSTANCE_CLEANUP_MARKER = "cleanup:{}"
 
-# Expiry of a cleanup marker, so a cleanup that never runs does not keep the file from being uploaded again.
+# Expiry of a cleanup marker until its task starts, so a cleanup that never runs does not keep the file from being
+# uploaded again. A running cleanup extends it to cover each PACS request before sending it.
 DICOM_SOP_INSTANCE_CLEANUP_TIMEOUT = 60
+
+# A cleanup marker this close to expiry is not extended: it could expire, and a new upload claim the file, between
+# the check that the marker is the cleanup's own and the extension. Also absorbs the cache round trips.
+DICOM_SOP_INSTANCE_CLEANUP_MARGIN = 5
 
 # How long an upload waits for the cleanup of a failed upload of the same file, and how often it checks.
 DICOM_SOP_INSTANCE_CLEANUP_WAIT = 10
