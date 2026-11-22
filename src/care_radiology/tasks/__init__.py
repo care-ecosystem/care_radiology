@@ -3,7 +3,7 @@ from celery.schedules import crontab
 
 from care_radiology.settings import plugin_settings
 from care_radiology.tasks.archive_old_studies import archive_old_dicom_studies
-from care_radiology.tasks.move_study_to_patient import move_study_to_care_patient  # noqa: F401
+from care_radiology.tasks.cleanup_failed_upload import cleanup_failed_pacs_upload  # noqa: F401
 
 
 @current_app.on_after_finalize.connect

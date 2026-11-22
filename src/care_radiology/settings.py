@@ -156,8 +156,6 @@ DEFAULTS = {
     "CARE_RADIOLOGY_STUDY_AUTO_ARCHIVE_DAYS": 365,
     # Permanently delete a study's files from the PACS (and so from the PACS database)
     "CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE": True,
-    "CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED": False,
-    "CARE_RADIOLOGY_PACS_PATIENT_SYNC_DELAY_SECONDS": 10,
 }
 
 plugin_settings = PluginSettings(PLUGIN_NAME, defaults=DEFAULTS, required_settings=REQUIRED_SETTINGS)

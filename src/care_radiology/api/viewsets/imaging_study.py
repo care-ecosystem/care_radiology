@@ -1,6 +1,5 @@
 import logging
 
-from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch, Q
 from django_filters import rest_framework as filters
 from drf_spectacular.utils import extend_schema
@@ -37,7 +36,6 @@ from care_radiology.services.dicom_service import (
     validate_accession_number,
 )
 from care_radiology.settings import plugin_settings
-from care_radiology.tasks.move_study_to_patient import schedule_move_study_to_care_patient
 
 logger = logging.getLogger(__name__)
 
@@ -166,12 +164,7 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
 
         if not service_request_id:
             self.authorize_write_radiology_data(encounter.facility)
-            response = self.handle_dicom_upload(imaging_study_for_encounter(encounter), dcm_file, user=request.user)
-            sync_enabled = plugin_settings.CARE_RADIOLOGY_PACS_PATIENT_SYNC_ENABLED
-            if sync_enabled and response.status_code == status.HTTP_201_CREATED:
-                study_uid = response.data["study_uid"]
-                transaction.on_commit(lambda: schedule_move_study_to_care_patient(study_uid))
-            return response
+            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dcm_file, user=request.user)
 
         service_request = get_object_or_404(
             ServiceRequest.objects.select_related("facility", "imaging_study"),
