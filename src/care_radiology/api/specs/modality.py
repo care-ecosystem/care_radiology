@@ -56,6 +56,14 @@ AETitle = Annotated[
 ]
 
 
+# DICOM UID root the modality device builds its Study Instance UIDs under (<root>.<suffix>). 
+UIDRoot = Annotated[
+    str,
+    BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
+    Field(max_length=40, pattern=r"^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*$"),
+]
+
+
 class ModalityMachineSpec(BaseModel):
     ae_title: AETitle
     modality: ModalityCodeChoices
@@ -73,12 +81,14 @@ AssignmentStatus = Literal["unassigned", "assigned"]
 
 class DicomDeviceMetadataWriteSpec(BaseModel):
     machine: ModalityMachineSpec
+    study_uid_root: UIDRoot
     dicom_enabler: UUID4
     assignment_status: AssignmentStatus | None = None
 
 
 class DicomDeviceMetadataReadSpec(BaseModel):
     machine: ModalityMachineSpec | None = None
+    study_uid_root: str | None = None
     dicom_enabler: UUID4 | None = None
     assignment_status: AssignmentStatus | None = None
     last_synced_at: datetime | None = None
