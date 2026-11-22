@@ -179,10 +179,15 @@ def modality_list_item(device):
 
 
 def modality_detail(device):
-    """The list item plus, for a DICOM Enabler, its DICOM endpoints. A DICOM device has nothing more."""
+    """
+    The list item plus, for a DICOM Enabler, its DICOM endpoints, and for a DICOM device, the study UID root
+    it builds its Study Instance UIDs under.
+    """
     item = modality_list_item(device)
+    metadata = device.metadata
     if device.care_type == DICOM_ENABLER_CARE_TYPE:
-        metadata = device.metadata
         item["store_scp"] = metadata.get("store_scp")
         item["modality_scp"] = metadata.get("modality_scp")
+    else:
+        item["study_uid_root"] = metadata.get("study_uid_root")
     return item
