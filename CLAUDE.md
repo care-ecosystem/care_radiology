@@ -49,11 +49,7 @@ CARE backend plugin. PRs are reviewed by care_ci; the rules live in
 ## Deliberate deviations
 - Router basenames do not follow the `care_hello` template's `<plug>__<resource>`, and are not even
   internally consistent. This is settled; neither style is a finding.
-- `ImagingStudyViewSet.lookup_field` is `service_request__external_id` — an imaging study is
-  addressed by its service request. This is not the `lookup_field = "id"` NEVER-rule.
 - `RadiologyAccess.can_{read,write}_radiology_observation_result_template` check core's
   `DiagnosticReportPermissions` slugs rather than declare new permissions: core owns those slugs.
-- `DicomStudy`'s unique constraint carries `Q(is_archived=False)`, not `Q(deleted=False)`:
-  archival, not soft delete, is that model's lifecycle.
 - `Makefile` and `tests/test_care_hello.py` are untouched cookiecutter boilerplate: the targets do
   not run, there is no test suite or CI test job, and lint is ruff only (line-length 120).
