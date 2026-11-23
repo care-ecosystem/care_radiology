@@ -39,6 +39,20 @@ class RadiologyAccess(AuthorizationHandler):
             facility=facility,
         )
 
+    def can_read_dicom_worklist(self, user, facility=None):
+        return self.check_permission_in_facility_organization(
+            permissions=[RadiologyPermissions.can_read_dicom_worklist.name],
+            user=user,
+            facility=facility,
+        )
+
+    def can_write_upload_dicom_study(self, user, facility=None):
+        return self.check_permission_in_facility_organization(
+            permissions=[RadiologyPermissions.can_write_upload_dicom_study.name],
+            user=user,
+            facility=facility,
+        )
+
     def get_accessible_radiology_devices(self, qs, user, facility):
         if user.is_superuser:
             return qs
