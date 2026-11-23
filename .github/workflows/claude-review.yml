@@ -1,0 +1,45 @@
+# Advisory PR review. The rules live centrally in care-ecosystem/care_reviewer and the
+# workflow in care-ecosystem/care_ci, so neither is edited here. Repo-specific context —
+# this plugin's registered name, entry points, integrations and deliberate deviations —
+# goes in CLAUDE.md at the repo root.
+#
+# This never blocks a merge: the review step is continue-on-error upstream and the job is
+# green even when the review is skipped or fails. Delete this file to opt out.
+
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+    paths-ignore:
+      - '**/*.lock'
+      - '**/package-lock.json'
+      - '**/Pipfile.lock'
+      - '**/poetry.lock'
+      - '**/uv.lock'
+      # Do NOT add migrations here. Migration hygiene is one of the rules with the
+      # highest hit rate, and this fleet has already had a migration regenerated
+      # under an existing filename — which Django silently ignores.
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.type != 'Bot'
+    # Pinned to @dev while the reviewer is being tuned: a rule or workflow change takes
+    # effect immediately, with no tag to move. Repin to @v1 once this is merged to main
+    # and tagged, so a workflow change becomes a deliberate rollout rather than a surprise.
+    # Required. A called workflow can only maintain or REDUCE the caller's permissions,
+    # never elevate them, and id-token: write is not in the default GITHUB_TOKEN set. Without
+    # this block the call is an elevation and the run fails at startup before any step runs.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    uses: care-ecosystem/care_ci/.github/workflows/plugin-review.yml@dev
+    with:
+      layer: backend
+    secrets: inherit
