@@ -53,6 +53,15 @@ class RadiologyAccess(AuthorizationHandler):
             facility=facility,
         )
 
+    # With a device, the check is scoped to the device's managing organizations, like core's can_manage_device.
+    def can_write_dicom_status(self, user, facility=None, device=None):
+        return self.check_permission_in_facility_organization(
+            permissions=[RadiologyPermissions.can_write_dicom_status.name],
+            user=user,
+            orgs=device.facility_organization_cache if device is not None else None,
+            facility=facility,
+        )
+
     def get_accessible_radiology_devices(self, qs, user, facility):
         if user.is_superuser:
             return qs
