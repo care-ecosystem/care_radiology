@@ -38,3 +38,7 @@ def get_patient_uhid(patient):
             return identifier.get("value")
 
     return None
+
+
+def get_dicom_patient_id(patient):
+    return get_patient_uhid(patient) or str(patient.external_id)

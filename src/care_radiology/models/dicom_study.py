@@ -6,7 +6,7 @@ from care_radiology.models.imaging_study import ImagingStudy
 
 class DicomStudy(EMRBaseModel):
     imaging_study = models.ForeignKey(ImagingStudy, on_delete=models.CASCADE, related_name="studies")
-    dicom_study_uid = models.CharField(max_length=500)
+    dicom_study_uid = models.CharField(max_length=500, db_index=True)
 
     is_archived = models.BooleanField(default=False)
     archive_reason = models.TextField(blank=True, default="")
@@ -22,6 +22,7 @@ class DicomStudy(EMRBaseModel):
     number_of_instances = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
+        ordering = ["-created_date", "-id"]
         constraints = [
             models.UniqueConstraint(
                 fields=["imaging_study", "dicom_study_uid"],

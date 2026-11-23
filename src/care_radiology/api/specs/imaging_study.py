@@ -39,10 +39,14 @@ class ImagingStudyReadSpec(EMRResource):
         if pacs_details is None:
             pacs_details = fetch_studies(studies)
         mapping["studies"] = [
-            cls.__study_spec__.serialize(study, pacs_details=pacs_details[study.id]).to_json()
+            cls.__study_spec__.serialize(study, pacs_details=pacs_details.get(study.id)).to_json()
             for study in studies
-            if study.id in pacs_details
+            if study.id in pacs_details or not study.dicom_study_uid
         ]
+
+
+class ImagingStudyArchivedReadSpec(ImagingStudyReadSpec):
+    __study_spec__ = DicomStudyRetrieveSpec
 
 
 class ImagingStudyRetrieveSpec(ImagingStudyReadSpec):

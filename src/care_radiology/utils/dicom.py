@@ -3,6 +3,7 @@ import logging
 import zlib
 from datetime import datetime
 from enum import Enum
+from urllib.parse import quote
 
 import requests
 from django.utils import timezone
@@ -22,13 +23,11 @@ def get_pacs_query_timeout():
 
 
 class DICOM_TAG(Enum):
-    StudyInstanceUID = "0020000D"
     StudyModalities = "00080061"
     StudyDescription = "00081030"
     StudyDate = "00080020"
     StudyTime = "00080030"
     TimezoneOffsetFromUTC = "00080201"
-    AccessionNumber = "00080050"
 
     SeriesInstanceUID = "0020000E"
     SeriesModality = "00080060"
@@ -37,9 +36,6 @@ class DICOM_TAG(Enum):
     SeriesDescription = "0008103E"
 
     SOPInstanceUID = "00080018"
-    ReferencedInstanceUID = "00081155"
-
-    ReferencedSOPSQ = "00081199"
 
 
 def _query_pacs(url, log_ctx, params=None):
@@ -66,16 +62,48 @@ def _query_pacs(url, log_ctx, params=None):
         return None
 
 
-def d_query_instance(instance_id):
-    data = _query_pacs(
-        f"{DCM4CHEE_BASEURL}/rs/instances",
-        f"instance {instance_id}",
-        params={"SOPInstanceUID": instance_id},
-    )
-    if isinstance(data, list) and data:
-        return data[0]
+_SOP_INSTANCE_QUERY_PAGE_SIZE = 1000
 
-    return None
+
+def d_query_study_sop_instance_uids(study_uid):
+    """
+    The SOP Instance UIDs of every instance the PACS has for the study, fetched a page at a
+    time, or None (logged) if the PACS could not be queried.
+    """
+    url = f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/instances"
+    sop_instance_uids = []
+    offset = 0
+    while True:
+        try:
+            response = requests.get(
+                url=url,
+                headers={"Accept": "application/dicom+json"},
+                params={
+                    "includefield": DICOM_TAG.SOPInstanceUID.value,
+                    "limit": _SOP_INSTANCE_QUERY_PAGE_SIZE,
+                    "offset": offset,
+                },
+                timeout=get_pacs_query_timeout(),
+            )
+        except requests.RequestException as e:
+            logger.warning("PACS query failed for study %s instances: %s", study_uid, e)
+            return None
+        # QIDO-RS answers a query with no matches with 204 and no body.
+        if response.status_code == 204:
+            return sop_instance_uids
+        if not response.ok:
+            logger.warning("PACS query failed for study %s instances: status=%s", study_uid, response.status_code)
+            return None
+        try:
+            page = response.json()
+        except ValueError:
+            logger.warning("PACS returned invalid JSON for study %s instances", study_uid)
+            return None
+        for instance in page:
+            sop_instance_uids.extend(d_find(instance, DICOM_TAG.SOPInstanceUID.value)[:1])
+        if len(page) < _SOP_INSTANCE_QUERY_PAGE_SIZE:
+            return sop_instance_uids
+        offset += len(page)
 
 
 def d_query_series_for_study(study_id):
@@ -246,6 +274,11 @@ _EXPLICIT_VR_LONG_FORM_VRS = (b"OB", b"OD", b"OF", b"OL", b"OV", b"OW", b"SQ", b
 
 TRANSFER_SYNTAX_UID = (0x0002, 0x0010)
 ACCESSION_NUMBER = (0x0008, 0x0050)
+STUDY_INSTANCE_UID = (0x0020, 0x000D)
+
+ITEM = (0xFFFE, 0xE000)
+ITEM_DELIMITATION = (0xFFFE, 0xE00D)
+SEQUENCE_DELIMITATION = (0xFFFE, 0xE0DD)
 
 IMPLICIT_VR_LITTLE_ENDIAN = "1.2.840.10008.1.2"
 EXPLICIT_VR_BIG_ENDIAN = "1.2.840.10008.1.2.2"
@@ -256,6 +289,8 @@ UNDEFINED_LENGTH = 0xFFFFFFFF
 _INFLATE_CHUNK_SIZE = 64 * 1024
 
 _MAX_VALUE_LENGTH = 1024
+
+_MAX_SEQUENCE_DEPTH = 16
 
 
 class DicomParseError(Exception):
@@ -270,7 +305,7 @@ class _InflatingReader:
     """
     Read-only stream over a raw-deflated dataset that inflates only as much as is read.
 
-    The parser stops at the first tag past the Accession Number, so this avoids
+    The parser stops at the first tag past the one it reads, so this avoids
     decompressing the whole file without imposing a fixed cut-off that would make
     a valid dataset look truncated.
     """
@@ -303,9 +338,10 @@ def _read_exact(stream, length):
 
 def _read_element_header(stream, implicit_vr, byteorder):
     """
-    Read one data element's header, returning (tag, value length), or None at a clean
-    end of data. The value is left unread so the caller can decide from the tag
-    whether it is worth reading at all.
+    Read one data element's header, returning (tag, VR, value length), or None at a clean
+    end of data. The VR is None in implicit VR and for items and delimiters, which have
+    none in either encoding. The value is left unread so the caller can decide from the
+    tag whether it is worth reading at all.
     """
     header = stream.read(4)
     if not header:
@@ -314,7 +350,8 @@ def _read_element_header(stream, implicit_vr, byteorder):
         raise DicomParseError("File ends in the middle of a data element")
     tag = (int.from_bytes(header[0:2], byteorder), int.from_bytes(header[2:4], byteorder))
 
-    if implicit_vr:
+    vr = None
+    if implicit_vr or tag[0] == ITEM[0]:
         length = int.from_bytes(_read_exact(stream, 4), byteorder)
     else:
         vr = _read_exact(stream, 2)
@@ -323,14 +360,12 @@ def _read_element_header(stream, implicit_vr, byteorder):
             length = int.from_bytes(_read_exact(stream, 4), byteorder)
         else:
             length = int.from_bytes(_read_exact(stream, 2), byteorder)
-    return tag, length
+    return tag, vr, length
 
 
 def _check_defined_length(tag, length):
     if length == UNDEFINED_LENGTH:
-        raise DicomParseError(
-            f"Undefined-length element ({tag[0]:04X},{tag[1]:04X}) before the accession number is not supported"
-        )
+        raise DicomParseError(f"Undefined-length element ({tag[0]:04X},{tag[1]:04X}) is not supported here")
 
 
 def _read_value(stream, tag, length):
@@ -356,11 +391,45 @@ def _skip_value(stream, tag, length):
         length -= len(_read_exact(stream, min(length, _INFLATE_CHUNK_SIZE)))
 
 
-def read_accession_number(file_obj):
+def _skip_element(stream, tag, vr, length, implicit_vr, byteorder, depth=0):
     """
-    Read Accession Number (0008,0050) from a DICOM Part 10 file.
-    Returns None if missing or empty; raises DicomParseError if the file
-    cannot be parsed far enough to determine the value.
+    Move past an element's value. An undefined length before the Pixel Data can only be a
+    sequence, whose items are walked to its delimiter; one with VR UN is encoded in implicit
+    VR little endian, whatever the transfer syntax.
+    """
+    if length != UNDEFINED_LENGTH:
+        _skip_value(stream, tag, length)
+        return
+    if depth >= _MAX_SEQUENCE_DEPTH:
+        raise DicomParseError("Sequences are nested too deeply")
+    if vr == b"UN":
+        implicit_vr, byteorder = True, "little"
+    while True:
+        header = _read_element_header(stream, implicit_vr, byteorder)
+        if header is None:
+            raise DicomParseError("File ends in the middle of a sequence")
+        item_tag, _, item_length = header
+        if item_tag == SEQUENCE_DELIMITATION:
+            return
+        if item_tag != ITEM:
+            raise DicomParseError(f"Unexpected element ({item_tag[0]:04X},{item_tag[1]:04X}) in a sequence")
+        if item_length != UNDEFINED_LENGTH:
+            _skip_value(stream, item_tag, item_length)
+            continue
+        while True:
+            header = _read_element_header(stream, implicit_vr, byteorder)
+            if header is None:
+                raise DicomParseError("File ends in the middle of a sequence item")
+            if header[0] == ITEM_DELIMITATION:
+                break
+            _skip_element(stream, *header, implicit_vr, byteorder, depth + 1)
+
+
+def _read_dataset_string(file_obj, target_tag, name):
+    """
+    Read a string element of the dataset (not the file meta group) from a DICOM Part 10 file.
+    Returns None if missing or empty; raises DicomParseError if the file cannot be parsed far
+    enough to determine the value.
     """
     try:
         file_obj.seek(0)
@@ -369,8 +438,6 @@ def read_accession_number(file_obj):
 
         transfer_syntax = None
         while True:
-            # Only the group is peeked at before reading on: past the meta group the
-            # dataset may use another encoding, so its element must not be parsed here.
             dataset_start = file_obj.tell()
             group = file_obj.read(2)
             if len(group) < 2:
@@ -378,7 +445,7 @@ def read_accession_number(file_obj):
             file_obj.seek(dataset_start)
             if int.from_bytes(group, "little") != FILE_META_GROUP:
                 break
-            tag, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
+            tag, _, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
             if tag == TRANSFER_SYNTAX_UID:
                 value = _read_value(file_obj, tag, length)
                 transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
@@ -396,22 +463,32 @@ def read_accession_number(file_obj):
             header = _read_element_header(stream, implicit_vr, byteorder)
             if header is None:
                 return None
-            tag, length = header
-            # Elements are in ascending tag order, so once past the accession number
+            tag, vr, length = header
+            # Elements are in ascending tag order, so once past the target tag
             # it is known to be absent, whatever this element's value holds.
-            if tag > ACCESSION_NUMBER:
+            if tag > target_tag:
                 return None
-            if tag == ACCESSION_NUMBER:
+            if tag == target_tag:
                 value = _read_value(stream, tag, length)
-                # SH values are padded to an even length with a trailing space.
+                # Values are padded to an even length with a trailing space (or null for UIDs).
                 return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
-            _skip_value(stream, tag, length)
+            _skip_element(stream, tag, vr, length, implicit_vr, byteorder)
     except DicomParseError as e:
-        logger.warning("Could not read Accession Number from DICOM file: %s", e.message)
+        logger.warning("Could not read %s from DICOM file: %s", name, e.message)
         raise
     except (OSError, UnicodeDecodeError, ValueError, zlib.error) as e:
-        logger.warning("Could not read Accession Number from DICOM file: %s", e)
+        logger.warning("Could not read %s from DICOM file: %s", name, e)
         raise DicomParseError(f"Could not parse DICOM file: {e}") from e
     finally:
         # encode_file_multipart_related() reads the file from the start.
         file_obj.seek(0)
+
+
+def read_accession_number(file_obj):
+    """Read Accession Number (0008,0050) from a DICOM Part 10 file, as _read_dataset_string does."""
+    return _read_dataset_string(file_obj, ACCESSION_NUMBER, "Accession Number")
+
+
+def read_study_instance_uid(file_obj):
+    """Read Study Instance UID (0020,000D) from a DICOM Part 10 file, as _read_dataset_string does."""
+    return _read_dataset_string(file_obj, STUDY_INSTANCE_UID, "Study Instance UID")

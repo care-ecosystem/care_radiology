@@ -18,6 +18,7 @@ class AccessionSequence(models.Model):
     last_value = models.PositiveIntegerField(default=0)
 
     class Meta:
+        ordering = ["id"]
         constraints = [
             models.UniqueConstraint(
                 fields=["facility", "resourcecategory", "year"],
