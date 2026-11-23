@@ -42,10 +42,6 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     def get_facility(self):
         return get_object_or_404(Facility, external_id=self.kwargs["facility_external_id"])
 
-    def authorize_write(self, facility):
-        if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
-            raise PermissionDenied("You do not have permission to write radiology data for this facility")
-
     def authorize_read_worklist(self, facility):
         if not AuthorizationController.call("can_read_dicom_worklist", self.request.user, facility):
             raise PermissionDenied("You do not have permission to read worklist for this facility")
@@ -121,8 +117,8 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
             care_type__in=[DICOM_ENABLER_CARE_TYPE, DICOM_CARE_TYPE],
             external_id=device_id,
         )
-        if not AuthorizationController.call("can_manage_device", request.user, device):
-            raise PermissionDenied("You do not have permission to update this device")
+        if not AuthorizationController.call("can_write_dicom_status", request.user, facility, device):
+            raise PermissionDenied("You do not have permission to update the status of this device")
         request_data = ModalityAssignmentStatusUpdateSpec.model_validate(request.data)
         device = update_modality_assignment_status(
             facility=facility,
@@ -151,7 +147,8 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     @action(detail=False, methods=["patch"], url_path="imaging_study/status")
     def update_status(self, request, *args, **kwargs):
         facility = self.get_facility()
-        self.authorize_write(facility)
+        if not AuthorizationController.call("can_write_dicom_status", request.user, facility):
+            raise PermissionDenied("You do not have permission to update imaging study status for this facility")
         request_data = WebhookMppsSpec.model_validate(request.data)
         RadiologyWebhookLogs.objects.create(
             raw_data=request.data, type="MPPS", created_by=request.user, updated_by=request.user
