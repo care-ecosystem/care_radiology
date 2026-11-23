@@ -28,3 +28,6 @@ class ImagingStudy(BaseModel):
         choices=ImagingStudyStatus.choices,
         default=ImagingStudyStatus.ACTIVE,
     )
+
+    class Meta:
+        ordering = ["-created_date", "-id"]

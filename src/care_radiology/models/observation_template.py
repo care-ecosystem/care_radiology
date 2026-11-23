@@ -25,6 +25,7 @@ class ObservationTemplate(EMRBaseModel):
     )
 
     class Meta:
+        ordering = ["-created_date", "-id"]
         indexes = [
             models.Index(fields=["observation_definition", "activity_definition"]),
         ]
@@ -43,6 +44,11 @@ class ObservationTemplateData(models.Model):
     code = models.CharField(max_length=255)
     value = models.TextField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
+
+    class Meta:
+        # Serialized straight into the API response, so the rows of a template must come
+        # back in the order they were saved rather than in Postgres' physical order.
+        ordering = ["id"]
 
     def __str__(self):
         return f"ObservationTemplateData: {self.id} (template={self.template_id})"
