@@ -9,12 +9,11 @@ CARE backend plugin. PRs are reviewed by care_ci; the rules live in
 - Package layout: `src/care_radiology/`
 
 ## Entry points
-- `apps.py` `ready()` registers, in order: `care_radiology.signals`;
-  `RadiologyPermissions` via `PermissionController.register_permission_handler`;
-  `care_radiology.security.access`; and two device types with `DeviceTypeRegistry` —
-  `DICOM_CARE_TYPE` → `ModalityDevice` and `DICOM_ENABLER_CARE_TYPE` → `ModalityEnablerDevice`.
-  It then calls `plugin_settings.validate()`, skipped for `BUILD_TIME_COMMANDS` so CARE images
-  can build.
+- `apps.py` `ready()` registers, in order: `care_radiology.signals`; `RadiologyPermissions` via
+  `PermissionController.register_permission_handler`; `care_radiology.security.access`; and two
+  device types with `DeviceTypeRegistry` — `DICOM_CARE_TYPE` → `ModalityDevice` and
+  `DICOM_ENABLER_CARE_TYPE` → `ModalityEnablerDevice`. It then calls `plugin_settings.validate()`,
+  skipped for `BUILD_TIME_COMMANDS` so CARE images can build.
 - `urls.py` exports `urlpatterns` from a router. Basenames: `radiology_dicom`,
   `radiology_observation_result_template`, `radiology_external`, and bare `imaging_study`.
 - Celery task function names, which differ from their module names: `archive_old_dicom_studies`
@@ -49,6 +48,9 @@ CARE backend plugin. PRs are reviewed by care_ci; the rules live in
 ## Deliberate deviations
 - Router basenames do not follow the `care_hello` template's `<plug>__<resource>`, and are not even
   internally consistent. This is settled; neither style is a finding.
+- `ImagingStudyViewSet.lookup_field` is `service_request__external_id`: the frontend only ever
+  holds a service request and needs "its study, or none yet". Studies without one are list-only;
+  making them retrievable also means guarding `authorize_{retrieve,update}`, which assume an SR.
 - `RadiologyAccess.can_{read,write}_radiology_observation_result_template` check core's
   `DiagnosticReportPermissions` slugs rather than declare new permissions: core owns those slugs.
 - `Makefile` and `tests/test_care_hello.py` are untouched cookiecutter boilerplate: the targets do
