@@ -42,18 +42,22 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     def get_facility(self):
         return get_object_or_404(Facility, external_id=self.kwargs["facility_external_id"])
 
-    def authorize_read(self, facility):
-        if not AuthorizationController.call("can_read_radiology_data", self.request.user, facility):
-            raise PermissionDenied("You do not have permission to read radiology data for this facility")
-
     def authorize_write(self, facility):
         if not AuthorizationController.call("can_write_radiology_data", self.request.user, facility):
             raise PermissionDenied("You do not have permission to write radiology data for this facility")
 
+    def authorize_read_worklist(self, facility):
+        if not AuthorizationController.call("can_read_dicom_worklist", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to read worklist for this facility")
+
+    def authorize_upload_dicom_study(self, facility):
+        if not AuthorizationController.call("can_write_upload_dicom_study", self.request.user, facility):
+            raise PermissionDenied("You do not have permission to upload DICOM studies for this facility")
+
     @action(detail=False, methods=["get"])
     def worklist(self, request, *args, **kwargs):
         facility = self.get_facility()
-        self.authorize_read(facility)
+        self.authorize_read_worklist(facility)
         query = DicomWorklistQuerySpec(**request.query_params.dict())
 
         devices = worklist_devices(facility, query.device_id)
@@ -131,7 +135,7 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
     @action(detail=False, methods=["post"], url_path="imaging_study/upload")
     def upload(self, request, *args, **kwargs):
         facility = self.get_facility()
-        self.authorize_write(facility)
+        self.authorize_upload_dicom_study(facility)
         dcm_file = request.FILES.get("file")
         if not dcm_file:
             raise ValidationError({"file": "This value is required"})
