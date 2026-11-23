@@ -23,3 +23,21 @@ class RadiologyPermissions(enum.Enum):
         PermissionContext.FACILITY,
         [FACILITY_ADMIN_ROLE, ADMIN_ROLE],
     )
+    can_read_dicom_worklist = Permission(
+        "Can Read DICOM Worklist on Facility",
+        "",
+        PermissionContext.FACILITY,
+        [FACILITY_ADMIN_ROLE, ADMIN_ROLE, DOCTOR_ROLE, NURSE_ROLE, STAFF_ROLE],
+    )
+    can_write_upload_dicom_study = Permission(
+        "Can Upload DICOM Study on Facility",
+        "",
+        PermissionContext.FACILITY,
+        [FACILITY_ADMIN_ROLE, ADMIN_ROLE],
+    )
+    can_write_dicom_status = Permission(
+        "Can Update DICOM Study and Modality Status on Facility",
+        "",
+        PermissionContext.FACILITY,
+        [FACILITY_ADMIN_ROLE, ADMIN_ROLE],
+    )
