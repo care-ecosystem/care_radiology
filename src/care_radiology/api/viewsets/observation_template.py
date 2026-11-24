@@ -17,6 +17,7 @@ from care_radiology.api.specs.observation_template import (
     ObservationTemplateReadSpec,
     ObservationTemplateUpdateSpec,
 )
+from care_radiology.api.viewsets.mixins import ServerTimingMixin
 from care_radiology.models.observation_template import ObservationTemplate
 
 
@@ -29,6 +30,7 @@ class ObservationTemplateFilters(filters.FilterSet):
 
 @extend_schema(tags=["Radiology: Observation Result Template"])
 class ObservationTemplateViewSet(
+    ServerTimingMixin,
     EMRCreateMixin,
     EMRUpdateMixin,
     EMRListMixin,

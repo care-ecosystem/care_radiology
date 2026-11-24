@@ -13,10 +13,11 @@ from care.utils.pagination.care_pagination import CareLimitOffsetPagination
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.api.specs.external import DicomWorklistQuerySpec, WebhookMppsSpec
 from care_radiology.api.specs.modality import ModalityAssignmentStatusUpdateSpec, ModalityListQuerySpec
-from care_radiology.api.viewsets.mixins import DicomUploadMixin
+from care_radiology.api.viewsets.mixins import DicomUploadMixin, ServerTimingMixin
 from care_radiology.constants import DICOM_CARE_TYPE, DICOM_ENABLER_CARE_TYPE
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.security.authentication import ServiceAccountTokenAuthentication
+from care_radiology.utils.server_timing import timed
 from care_radiology.services.dicom_service import (
     imaging_study_for_accession_number,
     process_mpps_webhook,
@@ -33,7 +34,7 @@ from care_radiology.services.worklist_service import get_service_requests, workl
 
 
 @extend_schema(tags=["Radiology: External"])
-class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
+class FacilityExternalViewSet(ServerTimingMixin, DicomUploadMixin, ViewSet):
     authentication_classes = [ServiceAccountTokenAuthentication]
 
     def get_exception_handler(self):
@@ -134,16 +135,21 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
 
     @action(detail=False, methods=["post"], url_path="imaging_study/upload")
     def upload(self, request, *args, **kwargs):
-        facility = self.get_facility()
-        self.authorize_upload_dicom_study(facility)
-        dcm_file = request.FILES.get("file")
+        with timed("facility-lookup", "load facility"):
+            facility = self.get_facility()
+        with timed("authorize", "can_write_upload_dicom_study"):
+            self.authorize_upload_dicom_study(facility)
+        with timed("parse-request", "parse multipart body"):
+            dcm_file = request.FILES.get("file")
         if not dcm_file:
             raise ValidationError({"file": "This value is required"})
 
         # The file is linked by its accession number, so one that cannot be linked is
         # rejected before it reaches the PACS.
-        accession_number = read_file_accession_number(dcm_file)
-        imaging_study = imaging_study_for_accession_number(accession_number, facility)
+        with timed("accession-check", "read accession number"):
+            accession_number = read_file_accession_number(dcm_file)
+        with timed("imaging-study-lookup", "imaging study for accession number"):
+            imaging_study = imaging_study_for_accession_number(accession_number, facility)
         return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
 
     # MPPS status update, mapped to an imaging study status and, optionally, a ServiceRequest tag.

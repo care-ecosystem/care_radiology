@@ -7,10 +7,11 @@ from rest_framework.viewsets import ViewSet
 
 from care.emr.api.viewsets.base import emr_exception_handler
 from care.security.authorization import AuthorizationController
+from care_radiology.api.viewsets.mixins import ServerTimingMixin
 
 
 @extend_schema(tags=["Radiology: Dicom"])
-class DicomViewSet(ViewSet):
+class DicomViewSet(ServerTimingMixin, ViewSet):
     def get_exception_handler(self):
         return emr_exception_handler
 
