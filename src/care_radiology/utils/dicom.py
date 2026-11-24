@@ -1,6 +1,7 @@
 import io
 import logging
 import zlib
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from urllib.parse import quote
@@ -213,60 +214,8 @@ def encode_file_multipart_related(file_obj):
     return body, content_type
 
 
-# Explicit-VR little endian is mandated for the file meta group, so these are the
-# only VRs there that use the 12-byte (reserved + 4-byte length) header form.
-_FILE_META_LONG_FORM_VRS = (b"OB", b"OW", b"OF", b"SQ", b"UT", b"UN")
-
 FILE_META_GROUP = 0x0002
 MEDIA_STORAGE_SOP_INSTANCE_UID = (0x0002, 0x0003)
-
-
-def read_sop_instance_uid(file_obj):
-    """
-    Read MediaStorageSOPInstanceUID (0002,0003) out of a DICOM Part 10 file's meta
-    group, which is identical to the dataset's SOPInstanceUID and uniquely identifies
-    this one file. Used to detect a re-upload of a file already stored in PACS.
-
-    The meta group is always explicit VR little endian regardless of the transfer
-    syntax of the dataset that follows, so it can be parsed without a DICOM library.
-    Returns None if the file is not a parseable Part 10 file.
-    """
-    try:
-        file_obj.seek(0)
-        if file_obj.read(132)[128:] != b"DICM":
-            return None
-
-        while True:
-            header = file_obj.read(8)
-            if len(header) < 8:
-                return None
-
-            group = int.from_bytes(header[0:2], "little")
-            element = int.from_bytes(header[2:4], "little")
-            vr = header[4:6]
-
-            # Past the meta group the transfer syntax may change, and the UID we want
-            # is always present within it, so there is nothing left to look for.
-            if group != FILE_META_GROUP:
-                return None
-
-            if vr in _FILE_META_LONG_FORM_VRS:
-                # Long form: the 2 reserved bytes are header[6:8], already consumed
-                # above, and the length is the 4 bytes that follow.
-                length = int.from_bytes(file_obj.read(4), "little")
-            else:
-                length = int.from_bytes(header[6:8], "little")
-
-            value = file_obj.read(length)
-            if (group, element) == MEDIA_STORAGE_SOP_INSTANCE_UID:
-                # UIDs are padded to an even length with a trailing null byte.
-                return value.decode("ascii").rstrip("\x00").strip() or None
-    except (OSError, UnicodeDecodeError, ValueError):
-        logger.warning("Could not read SOP Instance UID from DICOM file meta group")
-        return None
-    finally:
-        # encode_file_multipart_related() reads the file from the start.
-        file_obj.seek(0)
 
 
 # Every VR that uses the 12-byte (VR, reserved, 4-byte length) header in explicit VR.
@@ -425,17 +374,46 @@ def _skip_element(stream, tag, vr, length, implicit_vr, byteorder, depth=0):
             _skip_element(stream, *header, implicit_vr, byteorder, depth + 1)
 
 
-def _read_dataset_string(file_obj, target_tag, name):
+@dataclass(frozen=True)
+class DicomFileHeader:
+    """The header values the upload path reads, all from one pass over the file."""
+
+    sop_instance_uid: str | None
+    accession_number: str | None
+    study_instance_uid: str | None
+
+
+# Dataset tags collected below, and the last of them in tag order. Elements are in ascending
+# tag order, so once past it whatever has not been found is known to be absent.
+_HEADER_DATASET_TAGS = {ACCESSION_NUMBER: "accession_number", STUDY_INSTANCE_UID: "study_instance_uid"}
+_LAST_HEADER_DATASET_TAG = max(_HEADER_DATASET_TAGS)
+
+
+def _decode_value(value):
+    """Values are padded to an even length with a trailing space, or a null byte for UIDs."""
+    return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
+
+
+def read_file_header(file_obj):
     """
-    Read a string element of the dataset (not the file meta group) from a DICOM Part 10 file.
-    Returns None if missing or empty; raises DicomParseError if the file cannot be parsed far
-    enough to determine the value.
+    Read every header value the upload path needs from a DICOM Part 10 file in one pass:
+    MediaStorageSOPInstanceUID (0002,0003) from the file meta group, which is identical to the
+    dataset's SOPInstanceUID and uniquely identifies this one file, and the dataset's Accession
+    Number (0008,0050) and Study Instance UID (0020,000D).
+
+    The pass stops at the last of those tags, so it never reaches the pixel data. Returns None
+    for a value that is missing or empty; raises DicomParseError if the file cannot be parsed
+    far enough to tell.
     """
+    sop_instance_uid = None
+    values = {}
     try:
         file_obj.seek(0)
         if file_obj.read(132)[128:] != b"DICM":
             raise DicomParseError("Not a DICOM Part 10 file (missing DICM preamble)")
 
+        # The meta group is always explicit VR little endian, whatever the transfer syntax of
+        # the dataset that follows.
         transfer_syntax = None
         while True:
             dataset_start = file_obj.tell()
@@ -447,8 +425,9 @@ def _read_dataset_string(file_obj, target_tag, name):
                 break
             tag, _, length = _read_element_header(file_obj, implicit_vr=False, byteorder="little")
             if tag == TRANSFER_SYNTAX_UID:
-                value = _read_value(file_obj, tag, length)
-                transfer_syntax = value.decode("ascii").rstrip("\x00").strip()
+                transfer_syntax = _decode_value(_read_value(file_obj, tag, length))
+            elif tag == MEDIA_STORAGE_SOP_INSTANCE_UID:
+                sop_instance_uid = _decode_value(_read_value(file_obj, tag, length))
             else:
                 _skip_value(file_obj, tag, length)
 
@@ -459,36 +438,29 @@ def _read_dataset_string(file_obj, target_tag, name):
         implicit_vr = transfer_syntax == IMPLICIT_VR_LITTLE_ENDIAN
         byteorder = "big" if transfer_syntax == EXPLICIT_VR_BIG_ENDIAN else "little"
 
-        while True:
+        while len(values) < len(_HEADER_DATASET_TAGS):
             header = _read_element_header(stream, implicit_vr, byteorder)
             if header is None:
-                return None
+                break
             tag, vr, length = header
-            # Elements are in ascending tag order, so once past the target tag
-            # it is known to be absent, whatever this element's value holds.
-            if tag > target_tag:
-                return None
-            if tag == target_tag:
-                value = _read_value(stream, tag, length)
-                # Values are padded to an even length with a trailing space (or null for UIDs).
-                return value.decode("ascii", errors="replace").rstrip("\x00").strip() or None
-            _skip_element(stream, tag, vr, length, implicit_vr, byteorder)
+            if tag > _LAST_HEADER_DATASET_TAG:
+                break
+            if tag in _HEADER_DATASET_TAGS:
+                values[_HEADER_DATASET_TAGS[tag]] = _decode_value(_read_value(stream, tag, length))
+            else:
+                _skip_element(stream, tag, vr, length, implicit_vr, byteorder)
     except DicomParseError as e:
-        logger.warning("Could not read %s from DICOM file: %s", name, e.message)
+        logger.warning("Could not read the DICOM file header: %s", e.message)
         raise
     except (OSError, UnicodeDecodeError, ValueError, zlib.error) as e:
-        logger.warning("Could not read %s from DICOM file: %s", name, e)
+        logger.warning("Could not read the DICOM file header: %s", e)
         raise DicomParseError(f"Could not parse DICOM file: {e}") from e
     finally:
         # encode_file_multipart_related() reads the file from the start.
         file_obj.seek(0)
 
-
-def read_accession_number(file_obj):
-    """Read Accession Number (0008,0050) from a DICOM Part 10 file, as _read_dataset_string does."""
-    return _read_dataset_string(file_obj, ACCESSION_NUMBER, "Accession Number")
-
-
-def read_study_instance_uid(file_obj):
-    """Read Study Instance UID (0020,000D) from a DICOM Part 10 file, as _read_dataset_string does."""
-    return _read_dataset_string(file_obj, STUDY_INSTANCE_UID, "Study Instance UID")
+    return DicomFileHeader(
+        sop_instance_uid=sop_instance_uid,
+        accession_number=values.get("accession_number"),
+        study_instance_uid=values.get("study_instance_uid"),
+    )

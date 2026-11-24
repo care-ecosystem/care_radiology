@@ -18,6 +18,7 @@ from care_radiology.constants import DICOM_CARE_TYPE, DICOM_ENABLER_CARE_TYPE
 from care_radiology.models.webhook_logs import RadiologyWebhookLogs
 from care_radiology.security.authentication import ServiceAccountTokenAuthentication
 from care_radiology.services.dicom_service import (
+    DicomFile,
     imaging_study_for_accession_number,
     process_mpps_webhook,
     read_file_accession_number,
@@ -138,9 +139,10 @@ class FacilityExternalViewSet(DicomUploadMixin, ViewSet):
 
         # The file is linked by its accession number, so one that cannot be linked is
         # rejected before it reaches the PACS.
-        accession_number = read_file_accession_number(dcm_file)
+        dicom = DicomFile(dcm_file)
+        accession_number = read_file_accession_number(dicom)
         imaging_study = imaging_study_for_accession_number(accession_number, facility)
-        return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
+        return self.handle_dicom_upload(imaging_study, dicom, user=request.user)
 
     # MPPS status update, mapped to an imaging study status and, optionally, a ServiceRequest tag.
     @extend_schema(request=WebhookMppsSpec)

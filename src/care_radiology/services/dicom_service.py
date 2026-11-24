@@ -47,9 +47,7 @@ from care_radiology.utils.dicom import (
     d_query_study,
     d_query_study_sop_instance_uids,
     encode_file_multipart_related,
-    read_accession_number,
-    read_sop_instance_uid,
-    read_study_instance_uid,
+    read_file_header,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,9 +169,44 @@ def invalidate_study_upload_cache(study_uid):
     cache.delete(DICOM_STUDY_SOP_GENERATION_KEY_TEMPLATE.format(study_uid))
 
 
-def read_file_study_uid(dcm_file):
+class DicomFile:
+    """
+    An uploaded DICOM file and the single parse of its header. The Study Instance UID,
+    Accession Number and SOP Instance UID all come from that one pass, which runs on the
+    first value read and is re-raised to every later reader, so each still reports its own
+    error in the order it would have hit it.
+    """
+
+    def __init__(self, file):
+        self.file = file
+        self._parsed = False
+        self._header = None
+        self._error = None
+
+    def _parse(self):
+        if not self._parsed:
+            self._parsed = True
+            try:
+                self._header = read_file_header(self.file)
+            except DicomParseError as e:
+                self._error = e
+
+    def value(self, name):
+        self._parse()
+        if self._error:
+            raise self._error
+        return getattr(self._header, name)
+
+    @property
+    def sop_instance_uid(self):
+        """None when the file cannot be parsed: the duplicate check is skipped rather than fatal."""
+        self._parse()
+        return None if self._error else self._header.sop_instance_uid
+
+
+def read_file_study_uid(dicom):
     try:
-        study_uid = read_study_instance_uid(dcm_file)
+        study_uid = dicom.value("study_instance_uid")
     except DicomParseError as e:
         raise _validation_error(
             "study_uid_unreadable", "Could not read the Study Instance UID from the DICOM file", details=e.message
@@ -314,17 +347,17 @@ def _start_failed_upload_cleanup(study_uid, sop_instance_uid, claim_key):
         cache.delete(claim_key)
 
 
-def upload_dicom_file(imaging_study, dcm_file, user=None):
+def upload_dicom_file(imaging_study, dicom, user=None):
     """
     Uploads a DICOM file to the PACS. Its Study UID is checked against the cached links of the study, and its
     SOP Instance UID is claimed for the upload, which rejects a file another request is uploading or that the
     study's cached SOP Instance keys show in the PACS. The claim is kept apart from those expiring keys until the
     upload's record is committed. The PACS stores the file under the CARE patient's Patient ID.
     """
-    if not dcm_file:
+    if not dicom.file:
         raise DicomUploadError("No file provided", status_code=400)
 
-    study_uid = read_file_study_uid(dcm_file)
+    study_uid = read_file_study_uid(dicom)
     _validate_study_links(imaging_study, study_uid)
 
     claim_key = None
@@ -335,7 +368,7 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
             logger.warning("DICOM duplicate check is disabled on this instance, uploading without it")
 
         if duplicate_check_enabled:
-            sop_instance_uid = read_sop_instance_uid(dcm_file)
+            sop_instance_uid = dicom.sop_instance_uid
             if sop_instance_uid:
                 claim_key = _claim_sop_instance(study_uid, sop_instance_uid)
                 if claim_key is None:
@@ -345,7 +378,7 @@ def upload_dicom_file(imaging_study, dcm_file, user=None):
                         extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
                     )
 
-        body, content_type = encode_file_multipart_related(dcm_file)
+        body, content_type = encode_file_multipart_related(dicom.file)
 
         try:
             upload_response = requests.post(
@@ -502,9 +535,9 @@ def _validation_error(error_type, msg, **extra):
     return ValidationError({"errors": [{"type": error_type, "msg": msg, **extra}]})
 
 
-def read_file_accession_number(dcm_file):
+def read_file_accession_number(dicom):
     try:
-        accession_number = read_accession_number(dcm_file)
+        accession_number = dicom.value("accession_number")
     except DicomParseError as e:
         raise _validation_error(
             "accession_number_unreadable",
@@ -516,8 +549,8 @@ def read_file_accession_number(dcm_file):
     return accession_number
 
 
-def validate_accession_number(dcm_file, service_request):
-    file_accession_number = read_file_accession_number(dcm_file)
+def validate_accession_number(dicom, service_request):
+    file_accession_number = read_file_accession_number(dicom)
     try:
         imaging_study = service_request.imaging_study
     except ImagingStudy.DoesNotExist:

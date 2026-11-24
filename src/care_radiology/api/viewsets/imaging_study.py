@@ -28,6 +28,7 @@ from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.services.dicom_service import (
+    DicomFile,
     PacsDeleteError,
     archive_study,
     fetch_studies,
@@ -161,10 +162,11 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
         encounter = get_object_or_404(
             Encounter.objects.select_related("facility"), external_id=encounter_id, patient=patient
         )
+        dicom = DicomFile(dcm_file)
 
         if not service_request_id:
             self.authorize_write_radiology_data(encounter.facility)
-            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dcm_file, user=request.user)
+            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dicom, user=request.user)
 
         service_request = get_object_or_404(
             ServiceRequest.objects.select_related("facility", "imaging_study"),
@@ -186,11 +188,11 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             )
 
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
-            validate_accession_number(dcm_file, service_request)
+            validate_accession_number(dicom, service_request)
         else:
             logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 
-        return self.handle_dicom_upload(imaging_study, dcm_file, user=request.user)
+        return self.handle_dicom_upload(imaging_study, dicom, user=request.user)
 
     @extend_schema(request=DicomStudyArchiveSpec, responses={200: DicomStudyArchiveStateSpec})
     @action(detail=False, methods=["post"], url_path=r"(?P<study_id>[^/.]+)/archive")
