@@ -1,3 +1,4 @@
+import contextvars
 import logging
 import time
 import uuid
@@ -38,6 +39,7 @@ from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
 from care_radiology.settings import plugin_settings
 from care_radiology.utils.patient import get_dicom_patient_id
+from care_radiology.utils.server_timing import timed
 from care_radiology.utils.dicom import (
     DICOM_TAG,
     DicomParseError,
@@ -186,10 +188,11 @@ class DicomFile:
     def _parse(self):
         if not self._parsed:
             self._parsed = True
-            try:
-                self._header = read_file_header(self.file)
-            except DicomParseError as e:
-                self._error = e
+            with timed("parse-header", "one pass for Study UID, Accession Number and SOP Instance UID"):
+                try:
+                    self._header = read_file_header(self.file)
+                except DicomParseError as e:
+                    self._error = e
 
     def value(self, name):
         self._parse()
@@ -358,7 +361,8 @@ def upload_dicom_file(imaging_study, dicom, user=None):
         raise DicomUploadError("No file provided", status_code=400)
 
     study_uid = read_file_study_uid(dicom)
-    _validate_study_links(imaging_study, study_uid)
+    with timed("validate-study-links", "check cached study links"):
+        _validate_study_links(imaging_study, study_uid)
 
     claim_key = None
     stored = False
@@ -370,7 +374,8 @@ def upload_dicom_file(imaging_study, dicom, user=None):
         if duplicate_check_enabled:
             sop_instance_uid = dicom.sop_instance_uid
             if sop_instance_uid:
-                claim_key = _claim_sop_instance(study_uid, sop_instance_uid)
+                with timed("claim-sop-instance", "duplicate check + claim (Redis, may query PACS)"):
+                    claim_key = _claim_sop_instance(study_uid, sop_instance_uid)
                 if claim_key is None:
                     raise DicomUploadError(
                         "Duplicate: File already uploaded.",
@@ -378,23 +383,27 @@ def upload_dicom_file(imaging_study, dicom, user=None):
                         extra={"duplicate": True, "sop_instance_uid": sop_instance_uid},
                     )
 
-        body, content_type = encode_file_multipart_related(dicom.file)
+        with timed("encode-multipart", "build STOW-RS body"):
+            body, content_type = encode_file_multipart_related(dicom.file)
+        with timed("dicom-patient-id", "resolve CARE patient's DICOM Patient ID"):
+            dicom_patient_id = get_dicom_patient_id(imaging_study.patient)
 
         try:
-            upload_response = requests.post(
-                url=f"{DCM4CHEE_BASEURL}/rs/studies",
-                # dcm4chee sets each query parameter as an attribute of the stored file, overwriting its value.
-                params={"PatientID": get_dicom_patient_id(imaging_study.patient)},
-                data=body,
-                headers={
-                    "Content-Type": content_type,
-                    "Accept": "application/dicom+json",
-                },
-                timeout=(
-                    plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
-                    plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT,
-                ),
-            )
+            with timed("dcm4chee-stow", "dcm4chee POST STOW-RS store file"):
+                upload_response = requests.post(
+                    url=f"{DCM4CHEE_BASEURL}/rs/studies",
+                    # dcm4chee sets each query parameter as an attribute of the stored file, overwriting its value.
+                    params={"PatientID": dicom_patient_id},
+                    data=body,
+                    headers={
+                        "Content-Type": content_type,
+                        "Accept": "application/dicom+json",
+                    },
+                    timeout=(
+                        plugin_settings.CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT,
+                        plugin_settings.CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT,
+                    ),
+                )
             if upload_response.status_code not in [200, 201]:
                 raise DicomUploadError(
                     "Failed to upload to DCM4CHE",
@@ -417,8 +426,9 @@ def upload_dicom_file(imaging_study, dicom, user=None):
         if claim_key:
             transaction.on_commit(lambda: _release_stored_sop_instance(study_uid, sop_instance_uid, claim_key))
 
-        with transaction.atomic():
-            _lock_study_uid(study_uid)
+        with timed("db-link-study", "Study UID lock wait + link DicomStudy"), transaction.atomic():
+            with timed("db-study-lock", "wait for Study UID advisory lock"):
+                _lock_study_uid(study_uid)
             linked_elsewhere = _check_study_not_linked_elsewhere(imaging_study, study_uid, _load_study_links(study_uid))
             (dicom_study, created) = DicomStudy.objects.update_or_create(
                 dicom_study_uid=study_uid,
@@ -437,14 +447,16 @@ def upload_dicom_file(imaging_study, dicom, user=None):
             transaction.on_commit(lambda: _cache_study_links(study_uid))
 
         cache.delete(DICOM_STUDY_CACHE_KEY_TEMPLATE.format(study_uid))
-        study_details = fetch_study(dicom_study)
+        with timed("fetch-study", "refetch study details from PACS"):
+            study_details = fetch_study(dicom_study)
         if study_details is None:
             raise DicomUploadError(
                 "Upload succeeded but failed to fetch complete study details from DCM4CHE",
                 status_code=500,
                 extra={"study_uid": study_uid},
             )
-        save_study_counts(dicom_study, study_details)
+        with timed("save-study-counts", "update series/instance counts"):
+            save_study_counts(dicom_study, study_details)
 
         return {
             "study_uid": study_uid,
@@ -734,7 +746,11 @@ def fetch_studies(dicom_studies):
     if not dicom_studies:
         return {}
     with ThreadPoolExecutor(max_workers=min(10, len(dicom_studies))) as executor:
-        results = executor.map(fetch_or_none, dicom_studies)
+        # Each worker runs in a copy of the request's context, so its PACS calls reach the request's Server-Timing.
+        futures = [
+            executor.submit(contextvars.copy_context().run, fetch_or_none, study) for study in dicom_studies
+        ]
+        results = [future.result() for future in futures]
     return {study.id: details for study, details in zip(dicom_studies, results, strict=True) if details}
 
 
@@ -751,7 +767,8 @@ def _pacs_request(method, url, study_uid, step):
     False when it has no such study (404), so a repeated delete is a no-op.
     """
     try:
-        response = requests.request(method, url, timeout=_pacs_delete_timeout())
+        with timed(f"dcm4chee-{step}", f"dcm4chee {method} {step}"):
+            response = requests.request(method, url, timeout=_pacs_delete_timeout())
     except requests.RequestException as e:
         raise PacsDeleteError(
             f"Failed to {step} study in PACS",
@@ -795,12 +812,13 @@ def delete_study_from_pacs(study_uid):
 def _find_instance_series_uid(study_uid, sop_instance_uid):
     """The Series UID of the instance in the PACS, or None when the PACS does not have it."""
     try:
-        response = requests.get(
-            f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/instances",
-            params={"SOPInstanceUID": sop_instance_uid, "includefield": DICOM_TAG.SeriesInstanceUID.value},
-            headers={"Accept": "application/dicom+json"},
-            timeout=_pacs_delete_timeout(),
-        )
+        with timed("dcm4chee-qido-instance", "dcm4chee GET instance series"):
+            response = requests.get(
+                f"{DCM4CHEE_BASEURL}/rs/studies/{quote(study_uid, safe='')}/instances",
+                params={"SOPInstanceUID": sop_instance_uid, "includefield": DICOM_TAG.SeriesInstanceUID.value},
+                headers={"Accept": "application/dicom+json"},
+                timeout=_pacs_delete_timeout(),
+            )
     except requests.RequestException as e:
         raise PacsDeleteError(
             "Failed to find instance in PACS",

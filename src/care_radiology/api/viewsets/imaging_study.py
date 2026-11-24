@@ -23,7 +23,7 @@ from care_radiology.api.specs.imaging_study import (
     ImagingStudyRetrieveSpec,
     ImagingStudyUpdateSpec,
 )
-from care_radiology.api.viewsets.mixins import DicomUploadMixin
+from care_radiology.api.viewsets.mixins import DicomUploadMixin, ServerTimingMixin
 from care_radiology.constants import DICOM_FILE_EXTENSIONS
 from care_radiology.models.dicom_study import DicomStudy
 from care_radiology.models.imaging_study import ImagingStudy, ImagingStudyStatus
@@ -37,6 +37,7 @@ from care_radiology.services.dicom_service import (
     validate_accession_number,
 )
 from care_radiology.settings import plugin_settings
+from care_radiology.utils.server_timing import timed
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,9 @@ class ImagingStudyFilters(filters.FilterSet):
 
 
 @extend_schema(tags=["Radiology: Imaging Study"])
-class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet):
+class ImagingStudyViewSet(
+    ServerTimingMixin, DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRUpdateMixin, EMRBaseViewSet
+):
     database_model = ImagingStudy
     pydantic_read_model = ImagingStudyReadSpec
     pydantic_retrieve_model = ImagingStudyRetrieveSpec
@@ -144,10 +147,12 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
 
     @action(detail=False, methods=["post"])
     def upload(self, request, *args, **kwargs):
-        patient = self.get_patient()
-        encounter_id = request.data.get("encounter_id")
-        service_request_id = request.data.get("service_request_id")
-        dcm_file = request.FILES.get("file")
+        with timed("patient-lookup", "load patient"):
+            patient = self.get_patient()
+        with timed("parse-request", "parse multipart body"):
+            encounter_id = request.data.get("encounter_id")
+            service_request_id = request.data.get("service_request_id")
+            dcm_file = request.FILES.get("file")
 
         errors = {}
         if not encounter_id:
@@ -159,25 +164,32 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
         if errors:
             raise ValidationError(errors)
 
-        encounter = get_object_or_404(
-            Encounter.objects.select_related("facility"), external_id=encounter_id, patient=patient
-        )
+        with timed("encounter-lookup", "load encounter"):
+            encounter = get_object_or_404(
+                Encounter.objects.select_related("facility"), external_id=encounter_id, patient=patient
+            )
         dicom = DicomFile(dcm_file)
 
         if not service_request_id:
-            self.authorize_write_radiology_data(encounter.facility)
-            return self.handle_dicom_upload(imaging_study_for_encounter(encounter), dicom, user=request.user)
+            with timed("authorize", "can_write_radiology_data"):
+                self.authorize_write_radiology_data(encounter.facility)
+            with timed("imaging-study-lookup", "imaging study for encounter"):
+                imaging_study = imaging_study_for_encounter(encounter)
+            return self.handle_dicom_upload(imaging_study, dicom, user=request.user)
 
-        service_request = get_object_or_404(
-            ServiceRequest.objects.select_related("facility", "imaging_study"),
-            external_id=service_request_id,
-            patient=patient,
-        )
+        with timed("service-request-lookup", "load service request"):
+            service_request = get_object_or_404(
+                ServiceRequest.objects.select_related("facility", "imaging_study"),
+                external_id=service_request_id,
+                patient=patient,
+            )
         if service_request.encounter_id != encounter.id:
             raise ValidationError({"service_request_id": "Service request does not belong to this encounter"})
-        self.authorize_write_radiology_data(service_request.facility)
+        with timed("authorize", "can_write_radiology_data"):
+            self.authorize_write_radiology_data(service_request.facility)
 
-        imaging_study = imaging_study_for_service_request(service_request)
+        with timed("imaging-study-lookup", "imaging study for service request"):
+            imaging_study = imaging_study_for_service_request(service_request)
         if imaging_study.status == ImagingStudyStatus.CANCELLED:
             raise ValidationError(
                 {
@@ -188,7 +200,8 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
             )
 
         if plugin_settings.CARE_RADIOLOGY_VALIDATE_ACCESSION_NUMBER:
-            validate_accession_number(dicom, service_request)
+            with timed("accession-check", "read + validate accession number"):
+                validate_accession_number(dicom, service_request)
         else:
             logger.warning("DICOM accession number check is disabled on this instance, uploading without it")
 

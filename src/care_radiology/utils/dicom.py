@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from care_radiology.constants import DCM4CHEE_BASEURL
 from care_radiology.settings import plugin_settings
+from care_radiology.utils.server_timing import timed
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +40,16 @@ class DICOM_TAG(Enum):
     SOPInstanceUID = "00080018"
 
 
-def _query_pacs(url, log_ctx, params=None):
+def _query_pacs(url, log_ctx, timing_name, timing_desc, params=None):
     """GET a PACS endpoint and return parsed JSON, or None (logged) on timeout/failure."""
     try:
-        response = requests.get(
-            url=url,
-            headers={"Accept": "application/json"},
-            params=params,
-            timeout=get_pacs_query_timeout(),
-        )
+        with timed(timing_name, timing_desc):
+            response = requests.get(
+                url=url,
+                headers={"Accept": "application/json"},
+                params=params,
+                timeout=get_pacs_query_timeout(),
+            )
     except requests.Timeout:
         logger.warning("PACS query timeout for %s", log_ctx)
         return None
@@ -76,16 +78,17 @@ def d_query_study_sop_instance_uids(study_uid):
     offset = 0
     while True:
         try:
-            response = requests.get(
-                url=url,
-                headers={"Accept": "application/dicom+json"},
-                params={
-                    "includefield": DICOM_TAG.SOPInstanceUID.value,
-                    "limit": _SOP_INSTANCE_QUERY_PAGE_SIZE,
-                    "offset": offset,
-                },
-                timeout=get_pacs_query_timeout(),
-            )
+            with timed("dcm4chee-qido-instances", f"dcm4chee GET study instances, offset {offset}"):
+                response = requests.get(
+                    url=url,
+                    headers={"Accept": "application/dicom+json"},
+                    params={
+                        "includefield": DICOM_TAG.SOPInstanceUID.value,
+                        "limit": _SOP_INSTANCE_QUERY_PAGE_SIZE,
+                        "offset": offset,
+                    },
+                    timeout=get_pacs_query_timeout(),
+                )
         except requests.RequestException as e:
             logger.warning("PACS query failed for study %s instances: %s", study_uid, e)
             return None
@@ -108,7 +111,12 @@ def d_query_study_sop_instance_uids(study_uid):
 
 
 def d_query_series_for_study(study_id):
-    data = _query_pacs(f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series", f"study {study_id} series")
+    data = _query_pacs(
+        f"{DCM4CHEE_BASEURL}/rs/studies/{study_id}/series",
+        f"study {study_id} series",
+        "dcm4chee-qido-series",
+        "dcm4chee GET study series",
+    )
     return data or None
 
 
@@ -116,6 +124,8 @@ def d_query_study(study_uid):
     data = _query_pacs(
         f"{DCM4CHEE_BASEURL}/rs/studies",
         f"study {study_uid}",
+        "dcm4chee-qido-study",
+        "dcm4chee GET study",
         params={
             "StudyInstanceUID": study_uid,
             "includefield": ",".join(
