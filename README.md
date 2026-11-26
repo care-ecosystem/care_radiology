@@ -166,6 +166,36 @@ Machine-to-machine endpoints for the modality worklist server and other integrat
 | `GET facility/{facility_id}/external/worklist/` | Active service requests of the facility, newest first, each with its activity definition's locations and the active, available devices at each. Filters: `modality` (a location name: only requests at that location, each listing just that location and its devices), `created_date_after`, `created_date_before`. Paginated with `limit` / `offset` (default 14, max 200) and returns `count`. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_WORKLIST` (`100/m`) |
 | `POST facility/{facility_id}/external/imaging_study/upload/` | Uploads a DICOM file (`file` only) and links it by its Accession Number to the newest non-cancelled imaging study in the facility, whose patient the study then belongs to. A file whose accession number is unreadable, missing, or matches no imaging study is rejected (`400`) before it reaches the PACS. | `CARE_RADIOLOGY_RATE_LIMIT_DICOM_UPLOAD_EXTERNAL` (`2000/m`) |
 | `PATCH facility/{facility_id}/external/imaging_study/status/` | MPPS status update: sets the service request's imaging study to `study_status` (`in_progress`, `completed` or `cancelled`; a study already `completed` or `cancelled` keeps its status), then adds the facility tag whose display is the matching MPPS status (`Scan Started`, `Scan Completed` or `Scan Cancelled` respectively) to the service request, if the facility has one. | `CARE_RADIOLOGY_RATE_LIMIT_WEBHOOK_STATUS` (`200/m`) |
+| `GET facility/{facility_id}/external/modalities/`<br>`GET .../modalities/{device_id}/`<br>`PATCH .../modalities/{device_id}/status/` | The facility's DICOM Enablers and DICOM devices, for the DICOM Enabler to pick from; one device with its DICOM endpoints; and assigning or unassigning a device. | `CARE_RADIOLOGY_RATE_LIMIT_MODALITIES` (`50/m`) |
+
+### Auto-Archiving Old Studies
+
+A nightly Celery task can archive studies older than a set age. It is **off by default** - nothing is archived automatically unless it is enabled. It archives through the same path as the manual archive endpoint, so `CARE_RADIOLOGY_DELETE_STUDY_FROM_PACS_ON_ARCHIVE` applies to it too: with that setting at its default, auto-archiving **permanently deletes the files from the PACS**.
+
+A study the PACS delete fails for is left unarchived and retried on the next run.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `CARE_RADIOLOGY_STUDY_AUTO_ARCHIVE_ENABLED` | `False` | Enables the nightly task. The schedule is only registered when this is on. |
+| `CARE_RADIOLOGY_STUDY_AUTO_ARCHIVE_DAYS` | `365` | Archives studies whose CARE record is older than this many days, by `created_date`. |
+
+### PACS Timeouts
+
+Applied to every request the plugin makes to dcm4chee, in seconds.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `CARE_RADIOLOGY_PACS_CONNECT_TIMEOUT` | `30` | TCP connect timeout for all PACS operations. |
+| `CARE_RADIOLOGY_PACS_UPLOAD_TIMEOUT` | `600` | Read timeout for STOW-RS uploads. A large study needs a generous value. |
+| `CARE_RADIOLOGY_PACS_QUERY_TIMEOUT` | `60` | Read timeout for QIDO-RS queries and PACS deletes. |
+
+An upload that times out returns `504`, and the file may still have reached the PACS - a cleanup task removes it and releases its upload claim.
+
+### Other Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `CARE_RADIOLOGY_RADIOLOGY_CATEGORY` | `imaging` | The service request category treated as radiology. A service request in this category gets an imaging study and an accession number; others are ignored by the plugin. |
 
 [Extended Docs on Plug Installation](https://care-be-docs.ohc.network/pluggable-apps/configuration.html)
 
