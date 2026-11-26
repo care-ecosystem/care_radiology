@@ -11,9 +11,9 @@ MPPS_STATUS_DISCONTINUED = "Scan Cancelled"
 
 # Facility tag display added to the service request for each imaging study status of the MPPS webhook.
 MPPS_TAG_DISPLAY_BY_STATUS = {
-    "IN_PROGRESS": MPPS_STATUS_SCAN_STARTED,
-    "COMPLETED": MPPS_STATUS_SCAN_COMPLETED,
-    "CANCELLED": MPPS_STATUS_DISCONTINUED,
+    "in_progress": MPPS_STATUS_SCAN_STARTED,
+    "completed": MPPS_STATUS_SCAN_COMPLETED,
+    "cancelled": MPPS_STATUS_DISCONTINUED,
 }
 
 DICOM_FILE_EXTENSIONS = (".dcm", ".dicom")

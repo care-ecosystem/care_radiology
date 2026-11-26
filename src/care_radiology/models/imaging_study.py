@@ -7,10 +7,10 @@ from care.utils.models.base import BaseModel
 
 
 class ImagingStudyStatus(models.TextChoices):
-    ACTIVE = "ACTIVE"
-    IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
-    CANCELLED = "CANCELLED"
+    ACTIVE = "active"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class ImagingStudy(BaseModel):
