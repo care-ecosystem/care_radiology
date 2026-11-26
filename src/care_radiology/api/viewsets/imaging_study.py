@@ -120,21 +120,20 @@ class ImagingStudyViewSet(DicomUploadMixin, EMRListMixin, EMRRetrieveMixin, EMRU
         if not AuthorizationController.call("can_read_radiology_data", self.request.user, encounter.facility):
             raise PermissionDenied("You do not have permission to read radiology data for this facility")
 
+        has_archived_study = Exists(DicomStudy.objects.filter(imaging_study=OuterRef("pk"), is_archived=True))
         if archived_only:
-            queryset = queryset.filter(
-                Exists(DicomStudy.objects.filter(imaging_study=OuterRef("pk"), is_archived=True))
-            )
+            queryset = queryset.filter(has_archived_study)
 
-        return queryset.filter(
-            Q(service_request__isnull=True)
-            | Q(
-                service_request__status__in=[
-                    ServiceRequestStatusChoices.active,
-                    ServiceRequestStatusChoices.completed,
-                ]
-            ),
-            encounter=encounter,
-        ).prefetch_related(
+        visible = Q(service_request__isnull=True) | Q(
+            service_request__status__in=[
+                ServiceRequestStatusChoices.active,
+                ServiceRequestStatusChoices.completed,
+            ]
+        )
+        if archive_state != "active":
+            visible |= has_archived_study
+
+        return queryset.filter(visible, encounter=encounter).prefetch_related(
             Prefetch(
                 "service_request__diagnosticreport_set",
                 queryset=DiagnosticReport.objects.order_by("-created_date"),
