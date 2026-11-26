@@ -344,14 +344,14 @@ paths:
         Procedure Step (MPPS) status updates for a service request of the facility given in
         the path. All payloads are persisted to `RadiologyWebhookLogs` with `type="MPPS"`.
 
-        `study_status` is the imaging study status to set (`IN_PROGRESS`, `COMPLETED` or
-        `CANCELLED`):
+        `study_status` is the imaging study status to set (`in_progress`, `completed` or
+        `cancelled`):
         - Imaging study: its `status` is set to `study_status`. An imaging study already
-          `COMPLETED` or `CANCELLED` is left unchanged.
+          `completed` or `cancelled` is left unchanged.
         - Tag (optional): after the status update, the facility `TagConfig` whose
           `display` is the matching MPPS status is appended to `ServiceRequest.tags`
-          (duplicates are skipped): `IN_PROGRESS` → `Scan Started`, `COMPLETED` →
-          `Scan Completed`, `CANCELLED` → `Scan Cancelled`. With no such tag, only the
+          (duplicates are skipped): `in_progress` → `Scan Started`, `completed` →
+          `Scan Completed`, `cancelled` → `Scan Cancelled`. With no such tag, only the
           imaging study is updated.
 
         Authenticated with static API key (Authorization: <CARE_RADIOLOGY_WEBHOOK_SECRET>).
@@ -369,7 +369,7 @@ paths:
               $ref: '#/components/schemas/WebhookStatusPayload'
             example:
               service_request_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              study_status: "IN_PROGRESS"
+              study_status: "in_progress"
       responses:
         '200':
           description: |
@@ -383,8 +383,8 @@ paths:
         '400':
           description: |
             Payload failed validation against `WebhookMppsSpec` (missing/invalid
-            `service_request_id`, or `study_status` not one of `IN_PROGRESS`, `COMPLETED`,
-            `CANCELLED`), or a business rule failed: the service request's facility is
+            `service_request_id`, or `study_status` not one of `in_progress`, `completed`,
+            `cancelled`), or a business rule failed: the service request's facility is
             missing. A malformed JSON body (unparseable syntax) instead returns
             DRF's default `{"detail": ...}` shape — see the `Error` schema.
           content:
@@ -403,7 +403,7 @@ paths:
                     errors:
                       - type: "literal_error"
                         loc: ["study_status"]
-                        msg: "Input should be 'IN_PROGRESS', 'COMPLETED' or 'CANCELLED'"
+                        msg: "Input should be 'in_progress', 'completed' or 'cancelled'"
                 facility_not_found:
                   value:
                     errors:
@@ -984,7 +984,10 @@ paths:
       summary: List imaging studies for an encounter
       description: |
         Returns the `ImagingStudy` rows of an encounter of the patient, newest first, filtered
-        on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed. Each
+        on `ImagingStudy.encounter`. Only rows whose service request is active or completed are listed,
+        except that, unless `archive_state=active` is passed, rows of any other service request status
+        (e.g. entered-in-error or cancelled, whose studies are archived) are also listed when they
+        have archived DICOM studies. Each
         has the encounter and service request from core base specs only; use the retrieve for
         the full service request. Optionally filter on archive state with `archive_state`: `archived` lists only
         imaging studies that have archived DICOM studies, with only those in `studies[]`;
@@ -1118,7 +1121,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ImagingStudyStatusUpdate'
             example:
-              status: "IN_PROGRESS"
+              status: "in_progress"
       responses:
         '200':
           description: Status updated
@@ -1136,7 +1139,7 @@ paths:
                 errors:
                   - type: "enum"
                     loc: ["status"]
-                    msg: "Input should be 'ACTIVE', 'IN_PROGRESS', 'COMPLETED' or 'CANCELLED'"
+                    msg: "Input should be 'active', 'in_progress', 'completed' or 'cancelled'"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1902,7 +1905,7 @@ components:
           description: ImagingStudy external_id
         status:
           type: string
-          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+          enum: ["active", "in_progress", "completed", "cancelled"]
         accession_number:
           type: string
           nullable: true
@@ -1996,7 +1999,7 @@ components:
           description: ImagingStudy external_id
         status:
           type: string
-          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+          enum: ["active", "in_progress", "completed", "cancelled"]
         accession_number:
           type: string
           nullable: true
@@ -2282,7 +2285,7 @@ components:
       properties:
         status:
           type: string
-          enum: ["ACTIVE", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+          enum: ["active", "in_progress", "completed", "cancelled"]
 
     ImagingStudyList:
       allOf:
@@ -2307,12 +2310,12 @@ components:
           description: CARE ServiceRequest external_id
         study_status:
           type: string
-          enum: [IN_PROGRESS, COMPLETED, CANCELLED]
+          enum: [in_progress, completed, cancelled]
           description: |
             Imaging study status to set. The facility TagConfig whose display is the
             matching MPPS status (Scan Started, Scan Completed or Scan Cancelled) is also
             added to the service request's tags, if one exists.
-          example: "IN_PROGRESS"
+          example: "in_progress"
 
     WebhookStatusResponse:
       type: object

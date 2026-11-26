@@ -50,4 +50,4 @@ class DicomWorklistQuerySpec(BaseModel):
 
 class WebhookMppsSpec(BaseModel):
     service_request_id: UUID4
-    study_status: Literal["IN_PROGRESS", "COMPLETED", "CANCELLED"]
+    study_status: Literal["in_progress", "completed", "cancelled"]
