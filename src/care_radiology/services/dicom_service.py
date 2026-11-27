@@ -14,6 +14,7 @@ from rest_framework.exceptions import APIException, ValidationError
 from care.emr.models.encounter import Encounter
 from care.emr.models.service_request import ServiceRequest
 from care.emr.models.tag_config import TagConfig
+from care.emr.resources.tag.config_spec import TagResource, TagStatus
 from care.utils.shortcuts import get_object_or_404
 from care_radiology.constants import (
     ARCHIVED_STUDY_UID_FIELD,
@@ -584,7 +585,12 @@ def process_mpps_webhook(facility, service_request_id, study_status, user):
             imaging_study.save(update_fields=["status", "modified_date"])
 
         try:
-            tag_config = TagConfig.objects.filter(facility=facility, display=tag_display).first()
+            tag_config = TagConfig.objects.filter(
+                facility=facility,
+                display=tag_display,
+                resource=TagResource.service_request.value,
+                status=TagStatus.active.value,
+            ).first()
         except Exception as e:
             logger.exception("[MPPS] Error fetching tag")
             raise APIException("Error fetching tag configuration") from e
